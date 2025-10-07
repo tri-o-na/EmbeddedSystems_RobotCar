@@ -2,8 +2,8 @@
 #include <stdio.h>
 
 // Pin assignments
-#define TRIG_PIN 3
-#define ECHO_PIN 2
+#define TRIG_PIN 1
+#define ECHO_PIN 0
 #define ECHO_TIMEOUT_US 30000  // 30 ms ≈ 5 m max distance
 
 // Waits for the echo pin to reach a level (HIGH or LOW) with a timeout

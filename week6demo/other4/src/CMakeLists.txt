@@ -38,7 +38,22 @@ target_link_libraries(accel_raw_mpu6050
     pico_stdlib
     hardware_i2c
 )
+
 pico_add_extra_outputs(accel_raw_mpu6050)
+
+# === I2C Scanner Example ===
+add_executable(i2c_scan
+    src/i2c_scan.c
+)
+
+# Link the Pico SDK libraries you need
+target_link_libraries(i2c_scan
+    pico_stdlib        # for GPIO, time, stdio
+    hardware_i2c       # for I2C functions
+)
+
+# Generate the .uf2, .elf, etc.
+pico_add_extra_outputs(i2c_scan)
 
 # ---------- Ultrasonic HC-SR04 (echo pulse timing) ----------
 add_executable(ultrasonic_hcsr04

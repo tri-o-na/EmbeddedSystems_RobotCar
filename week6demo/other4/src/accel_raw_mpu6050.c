@@ -1,52 +1,50 @@
-#include <stdio.h>
 #include "pico/stdlib.h"
 #include "hardware/i2c.h"
+#include <stdio.h>
 
-// --- I2C pins (adjust) ---
 #define I2C_PORT i2c0
-#define PIN_SDA  4
-#define PIN_SCL  5
-#define MPU_ADDR 0x68
+#define SDA_PIN  16   // <-- your SDA pin
+#define SCL_PIN  17   // <-- your SCL pin
+#define MPU6050_ADDR 0x68
 
-static void mpu_write(uint8_t reg, uint8_t val) {
-    uint8_t buf[2] = { reg, val };
-    i2c_write_blocking(I2C_PORT, MPU_ADDR, buf, 2, false);
+// Initialize MPU6050
+static void mpu6050_init(void) {
+    uint8_t wake_cmd[] = {0x6B, 0x00};  // PWR_MGMT_1 register, wake up device
+    i2c_write_blocking(I2C_PORT, MPU6050_ADDR, wake_cmd, 2, false);
 }
 
-static void mpu_read(uint8_t reg, uint8_t *dst, size_t n) {
-    i2c_write_blocking(I2C_PORT, MPU_ADDR, &reg, 1, true);
-    i2c_read_blocking(I2C_PORT, MPU_ADDR, dst, n, false);
-}
+// Read 6 raw accel bytes
+static void read_raw_accel(int16_t *ax, int16_t *ay, int16_t *az) {
+    uint8_t reg = 0x3B;
+    uint8_t buf[6];
 
-static int16_t to_i16(uint8_t msb, uint8_t lsb) {
-    int16_t v = (int16_t)((msb << 8) | lsb);
-    return v;
+    // Point to ACCEL_XOUT_H
+    i2c_write_blocking(I2C_PORT, MPU6050_ADDR, &reg, 1, true);
+    i2c_read_blocking(I2C_PORT, MPU6050_ADDR, buf, 6, false);
+
+    *ax = (buf[0] << 8) | buf[1];
+    *ay = (buf[2] << 8) | buf[3];
+    *az = (buf[4] << 8) | buf[5];
 }
 
 int main() {
     stdio_init_all();
-    sleep_ms(300);
+    i2c_init(I2C_PORT, 400 * 1000);  // 400kHz I²C bus speed
 
-    // Init I2C
-    i2c_init(I2C_PORT, 400 * 1000);
-    gpio_set_function(PIN_SDA, GPIO_FUNC_I2C);
-    gpio_set_function(PIN_SCL, GPIO_FUNC_I2C);
-    gpio_pull_up(PIN_SDA);
-    gpio_pull_up(PIN_SCL);
+    // Assign I2C functions to your chosen pins
+    gpio_set_function(SDA_PIN, GPIO_FUNC_I2C);
+    gpio_set_function(SCL_PIN, GPIO_FUNC_I2C);
+    gpio_pull_up(SDA_PIN);
+    gpio_pull_up(SCL_PIN);
 
-    // Wake MPU6050: PWR_MGMT_1 (0x6B) = 0
-    mpu_write(0x6B, 0x00);
-    sleep_ms(50);
+    mpu6050_init();
+    printf("Raw accelerometer demo started (Pins 16/17)\n");
 
-    printf("MPU6050 raw accel demo (no processing)\n");
+    int16_t ax, ay, az;
+
     while (true) {
-        uint8_t b[6];
-        mpu_read(0x3B, b, 6);  // ACCEL_X/Y/Z H:L
-        int16_t ax = to_i16(b[0], b[1]);
-        int16_t ay = to_i16(b[2], b[3]);
-        int16_t az = to_i16(b[4], b[5]);
-        // Raw counts; default scale ~16384 LSB/g at ±2g
-        printf("AX=%d AY=%d AZ=%d\n", ax, ay, az);
-        sleep_ms(200);
+        read_raw_accel(&ax, &ay, &az);
+        printf("Raw accel X:%6d  Y:%6d  Z:%6d\n", ax, ay, az);
+        sleep_ms(500);
     }
 }

@@ -1,44 +1,91 @@
 #include "motor_encoder.h"
 #include "pico/stdlib.h"
 #include "hardware/pwm.h"
-#include <stdint.h>        // <-- add this line
-
+#include "hardware/irq.h"
+#include "hardware/timer.h"
+#include <stdio.h>
 
 #define M1A 8
 #define M1B 9
 #define M2A 10
 #define M2B 11
+#define ENC1_A 14
+#define ENC2_A 15
 #define PWM_WRAP 1000u
 #define PWM_DIVIDER 6.25f
 
-static inline uint16_t duty(float x) {
-    if (x > 1) x = 1;
-    if (x < -1) x = -1;
-    return (uint16_t)((x + 1) * PWM_WRAP / 2);
+static volatile uint32_t enc1_last_rise_us = 0;
+static volatile uint32_t enc2_last_rise_us = 0;
+static volatile uint32_t enc1_pulse_us = 0;
+static volatile uint32_t enc2_pulse_us = 0;
+
+static void encoder_isr(uint gpio, uint32_t events) {
+    uint32_t now = to_us_since_boot(get_absolute_time());
+    if (gpio == ENC1_A) {
+        if (events & GPIO_IRQ_EDGE_RISE)
+            enc1_last_rise_us = now;
+        else if ((events & GPIO_IRQ_EDGE_FALL) && enc1_last_rise_us)
+            enc1_pulse_us = now - enc1_last_rise_us;
+    } else if (gpio == ENC2_A) {
+        if (events & GPIO_IRQ_EDGE_RISE)
+            enc2_last_rise_us = now;
+        else if ((events & GPIO_IRQ_EDGE_FALL) && enc2_last_rise_us)
+            enc2_pulse_us = now - enc2_last_rise_us;
+    }
+}
+
+static void pwm_init_pin(uint gpio) {
+    gpio_set_function(gpio, GPIO_FUNC_PWM);
+    uint slice = pwm_gpio_to_slice_num(gpio);
+    pwm_config cfg = pwm_get_default_config();
+    pwm_config_set_clkdiv(&cfg, PWM_DIVIDER);
+    pwm_config_set_wrap(&cfg, PWM_WRAP);
+    pwm_init(slice, &cfg, true);
+    pwm_set_gpio_level(gpio, 0);
+}
+
+static inline uint16_t duty_from_float(float s) {
+    if (s < 0.0f) s = -s;
+    if (s > 1.0f) s = 1.0f;
+    return (uint16_t)(s * PWM_WRAP);
+}
+
+void motor_set(float m1, float m2) {
+    uint16_t d1 = duty_from_float(m1);
+    uint16_t d2 = duty_from_float(m2);
+
+    if (m1 > 0) { pwm_set_gpio_level(M1A, d1); pwm_set_gpio_level(M1B, 0); }
+    else if (m1 < 0) { pwm_set_gpio_level(M1A, 0); pwm_set_gpio_level(M1B, d1); }
+    else { pwm_set_gpio_level(M1A, 0); pwm_set_gpio_level(M1B, 0); }
+
+    if (m2 > 0) { pwm_set_gpio_level(M2A, d2); pwm_set_gpio_level(M2B, 0); }
+    else if (m2 < 0) { pwm_set_gpio_level(M2A, 0); pwm_set_gpio_level(M2B, d2); }
+    else { pwm_set_gpio_level(M2A, 0); pwm_set_gpio_level(M2B, 0); }
+}
+
+void motors_stop(void) {
+    motor_set(0.0f, 0.0f);
 }
 
 void motors_and_encoders_init(void) {
-    gpio_set_function(M1A, GPIO_FUNC_PWM);
-    gpio_set_function(M1B, GPIO_FUNC_PWM);
-    gpio_set_function(M2A, GPIO_FUNC_PWM);
-    gpio_set_function(M2B, GPIO_FUNC_PWM);
+    pwm_init_pin(M1A);
+    pwm_init_pin(M1B);
+    pwm_init_pin(M2A);
+    pwm_init_pin(M2B);
 
-    uint slice1 = pwm_gpio_to_slice_num(M1A);
-    uint slice2 = pwm_gpio_to_slice_num(M2A);
+    gpio_init(ENC1_A); gpio_set_dir(ENC1_A, GPIO_IN); gpio_pull_up(ENC1_A);
+    gpio_init(ENC2_A); gpio_set_dir(ENC2_A, GPIO_IN); gpio_pull_up(ENC2_A);
 
-    pwm_set_wrap(slice1, PWM_WRAP);
-    pwm_set_wrap(slice2, PWM_WRAP);
-    pwm_set_clkdiv(slice1, PWM_DIVIDER);
-    pwm_set_clkdiv(slice2, PWM_DIVIDER);
-    pwm_set_enabled(slice1, true);
-    pwm_set_enabled(slice2, true);
+    gpio_set_irq_enabled_with_callback(ENC1_A,
+        GPIO_IRQ_EDGE_RISE | GPIO_IRQ_EDGE_FALL, true, &encoder_isr);
+    gpio_set_irq_enabled(ENC2_A,
+        GPIO_IRQ_EDGE_RISE | GPIO_IRQ_EDGE_FALL, true);
+
+    printf("Motors + Encoders initialized.\n");
 }
 
-void motor_set(float left, float right) {
-    pwm_set_gpio_level(M1A, duty(left));
-    pwm_set_gpio_level(M1B, PWM_WRAP - duty(left));
-    pwm_set_gpio_level(M2A, duty(right));
-    pwm_set_gpio_level(M2B, PWM_WRAP - duty(right));
+uint32_t encoder_pulse_width_us(int motor_index) {
+    if (motor_index == 1) return enc1_pulse_us;
+    if (motor_index == 2) return enc2_pulse_us;
+    return 0;
 }
-
-void motors_stop(void) { motor_set(0, 0); }

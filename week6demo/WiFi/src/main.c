@@ -183,7 +183,7 @@ static err_t bidir_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t e
     printf("PC -> %.*s\n", p->tot_len, (char*)p->payload);
 
     // Reply message back to PC
-    const char *reply = "Pico received your message!";
+    const char *reply = "I have received your message!";
     tcp_write(tpcb, reply, strlen(reply), TCP_WRITE_FLAG_COPY);
     tcp_output(tpcb);
 

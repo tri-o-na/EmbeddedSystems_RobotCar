@@ -3,7 +3,7 @@ import threading
 import time
 
 # --- Configuration ---
-PICO_IP = "172.20.10.8"   # ← change to your Pico W IP
+PICO_IP = "172.20.10.7"   # ← change to your Pico W IP
 PORT = 12345              # must match start_bidir_server() in main.c
 
 

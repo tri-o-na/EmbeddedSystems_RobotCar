@@ -147,18 +147,24 @@ pico_enable_stdio_uart(i2c_scanner 0)
 pico_add_extra_outputs(i2c_scanner)
 
 
-#integration demo 1 demo
+
+# Integration Demo
 add_executable(Integration
-    main.c
-    imu_mpu6050.c
-    motor_encoder.c
-    pid.c
+    week6demo/Integration/main.c
+    week6demo/Integration/imu_mpu6050.c
+    week6demo/Integration/motor_encoder.c
+    week6demo/Integration/pid.c
+)
+
+target_include_directories(Integration PRIVATE
+    ${CMAKE_CURRENT_LIST_DIR}/week6demo/Integration
 )
 
 target_link_libraries(Integration
     pico_stdlib
     hardware_i2c
     hardware_pwm
+    hardware_timer
 )
 
 pico_enable_stdio_usb(Integration 1)

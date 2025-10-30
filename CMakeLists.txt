@@ -145,3 +145,31 @@ target_link_libraries(i2c_scanner pico_stdlib hardware_i2c)
 pico_enable_stdio_usb(i2c_scanner 1)
 pico_enable_stdio_uart(i2c_scanner 0)
 pico_add_extra_outputs(i2c_scanner)
+
+# --------------------------------------------------------------------------
+# ---------- Week 10 Integrated Demo (Network + All Sensors) ----------
+# --------------------------------------------------------------------------
+add_executable(week10_integration
+    week10demo/main.c
+    week10demo/integrated_robot.c
+)
+
+# FIX: Removed quotes from the path to prevent double-quoting error in Pico SDK v1.5.1
+target_compile_definitions(week10_integration PRIVATE
+    PICO_CONFIG_HEADER=week10demo/pico_sdk_config.h
+)
+
+pico_enable_stdio_usb(week10_integration 1)
+pico_enable_stdio_uart(week10_integration 0)
+
+target_link_libraries(week10_integration
+    pico_stdlib
+    pico_cyw43_arch_lwip_threadsafe_background 
+    hardware_i2c
+    hardware_pwm
+    hardware_timer
+    hardware_irq
+    hardware_adc
+)
+
+pico_add_extra_outputs(week10_integration)

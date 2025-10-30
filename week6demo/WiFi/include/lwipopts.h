@@ -52,6 +52,8 @@
 #define LWIP_DEBUG                  1
 #define LWIP_STATS                  1
 #define LWIP_STATS_DISPLAY          1
+#define LWIP_ICMP 1
+#define LWIP_ICMP_ECHO 1
 #endif
 
 #define ETHARP_DEBUG                LWIP_DBG_OFF

@@ -174,6 +174,39 @@ static err_t on_accept(void *arg, struct tcp_pcb *newpcb, err_t err) {
     return ERR_OK;
 }
 
+
+// ===== NEW: bidirectional TCP server =====
+static err_t bidir_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err) {
+    if (!p) { tcp_close(tpcb); return ERR_OK; }
+    tcp_recved(tpcb, p->tot_len);
+
+    printf("PC -> %.*s\n", p->tot_len, (char*)p->payload);
+
+    // Reply message back to PC
+    const char *reply = "I have received your message!";
+    tcp_write(tpcb, reply, strlen(reply), TCP_WRITE_FLAG_COPY);
+    tcp_output(tpcb);
+
+    pbuf_free(p);
+    return ERR_OK;
+}
+
+static err_t bidir_accept(void *arg, struct tcp_pcb *newpcb, err_t err) {
+    printf("Bidirectional client connected!\n");
+    tcp_recv(newpcb, bidir_recv);
+    return ERR_OK;
+}
+
+static void start_bidir_server(void) {
+    struct tcp_pcb *pcb = tcp_new();
+    tcp_bind(pcb, IP_ADDR_ANY, 12345);       // listen on TCP port 12345
+    pcb = tcp_listen(pcb);
+    tcp_accept(pcb, bidir_accept);
+    printf("Bidirectional TCP server on port 12345\n");
+}
+
+
+
 int main() {
     stdio_init_all(); sleep_ms(1200);
     if (cyw43_arch_init()) return -1;
@@ -187,6 +220,11 @@ int main() {
     tcp_bind(listen_pcb, IP_ADDR_ANY, TCP_PORT);
     listen_pcb = tcp_listen(listen_pcb);
     tcp_accept(listen_pcb, on_accept);
+
+
+    // ===== NEW =====
+    start_bidir_server();
+    // ===== END NEW =====
 
     while (true) {
         // blink heartbeat

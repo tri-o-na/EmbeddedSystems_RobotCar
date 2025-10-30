@@ -1,6 +1,6 @@
 import time, urllib.parse, http.client
 
-PICO_IP = "172.20.10.8"     # change to your Pico IP
+PICO_IP = "172.20.10.7"     # change to your Pico IP
 PORT    = 80
 
 def send(type_str, msg):

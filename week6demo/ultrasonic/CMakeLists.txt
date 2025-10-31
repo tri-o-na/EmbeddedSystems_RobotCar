@@ -8,8 +8,13 @@ target_link_libraries(pico_ultrasonic_object pico_stdlib hardware_gpio hardware_
 target_include_directories(pico_ultrasonic_object PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 
 # ----- Executable -----
-add_executable(ultrasonic
-    main.c
+add_executable(ultrasonic 
+    main.c 
+    ultrasonic.c
+    servo.c        # <-- Add this line for servo functions
+    motor_encoder.c # <-- Add this line for wheel motor functions
+    imu_mpu6050.c
+    pid.c
 )
 
 target_link_libraries(ultrasonic

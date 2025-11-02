@@ -16,17 +16,17 @@
 #define MEM_LIBC_MALLOC             0
 #endif
 #define MEM_ALIGNMENT               4
-#define MEM_SIZE                    4000
-#define MEMP_NUM_TCP_SEG            32
+// MEM_SIZE defined below (8000) - removed duplicate
+#define MEMP_NUM_TCP_SEG            64  // Increased from 32 to prevent TCP queue overflow
 #define MEMP_NUM_ARP_QUEUE          10
-#define PBUF_POOL_SIZE              24
+#define PBUF_POOL_SIZE              32  // Increased from 24 to prevent buffer exhaustion
 #define LWIP_ARP                    1
 #define LWIP_ETHERNET               1
 #define LWIP_ICMP                   1
 #define LWIP_RAW                    1
 #define TCP_WND                     (8 * TCP_MSS)
 #define TCP_MSS                     1460
-#define TCP_SND_BUF                 (8 * TCP_MSS)
+#define TCP_SND_BUF                 (16 * TCP_MSS)  // Increased from 8 to prevent send queue overflow
 #define TCP_SND_QUEUELEN            ((4 * (TCP_SND_BUF) + (TCP_MSS - 1)) / (TCP_MSS))
 #define LWIP_NETIF_STATUS_CALLBACK  1
 #define LWIP_NETIF_LINK_CALLBACK    1

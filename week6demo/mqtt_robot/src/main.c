@@ -134,8 +134,11 @@ int main() {
             last_blink = now;
         }
         
-        // Poll MQTT and network
-        robot_mqtt_process_events();
+        // Poll MQTT and network MORE FREQUENTLY to drain queue faster
+        // This is critical for preventing TCP send queue overflow
+        for (int i = 0; i < 3; i++) {
+            robot_mqtt_process_events();
+        }
         robot_mqtt_ensure_connected();
         
         // ============================================================
@@ -167,13 +170,14 @@ int main() {
             last_connection_check = get_absolute_time();
         }
         
-        // Publish telemetry periodically
+        // Publish telemetry periodically (backpressure checking is done inside)
         if (robot_mqtt_check_connection() && (now - last_telemetry > TELEMETRY_INTERVAL_MS)) {
             robot_send_telemetry_data();
             last_telemetry = now;
         }
         
-        sleep_ms(50);
+        // Shorter sleep to process events more frequently (helps drain TCP queue)
+        sleep_ms(25);
     }
     
     return 0;

@@ -15,6 +15,9 @@
 #include "mqtt_config.h"
 #include "pico/time.h"
 
+// External reference to cyw43_state (defined in cyw43_arch)
+extern cyw43_t cyw43_state;
+
 // ============================================================
 // lwIP Poll Helper
 // ============================================================
@@ -48,6 +51,14 @@ static bool mqtt_has_ever_connected = false;
 
 // Callback function pointer for received commands
 static void (*mqtt_cmd_callback)(const char *topic, const char *payload, int len) = NULL;
+
+// ============================================================
+// Backpressure Control State
+// ============================================================
+static bool mqtt_publish_in_progress = false;
+static absolute_time_t mqtt_last_publish_time = 0;  // Initialize to 0 (nil_time equivalent)
+static const uint32_t MQTT_MIN_PUBLISH_INTERVAL_MS = 800;  // Minimum 800ms between publishes
+static const uint32_t MQTT_PUBLISH_DRAIN_TIMEOUT_MS = 1500; // Max time to wait for queue to drain
 
 // ============================================================
 // MQTT Connection Status Callback
@@ -120,21 +131,71 @@ static void mqtt_incoming_data_callback(void *arg,
 }
 
 // ============================================================
-// Publish Message Helper with WiFi Check
+// Backpressure Check: Can we publish now?
 // ============================================================
-static void mqtt_publish_message_safe(const char *topic, const char *payload) {
+static bool mqtt_can_publish_now(void) {
+    absolute_time_t now = get_absolute_time();
+    
+    // If no publish has happened yet, we can publish
+    if (is_nil_time(mqtt_last_publish_time)) {
+        return true;
+    }
+    
+    // Check minimum interval between publishes (rate limiting)
+    int64_t time_since_last_publish = absolute_time_diff_us(mqtt_last_publish_time, now) / 1000; // Convert to ms
+    
+    if (time_since_last_publish < (int64_t)MQTT_MIN_PUBLISH_INTERVAL_MS) {
+        // Too soon - haven't waited long enough
+        return false;
+    }
+    
+    // Check if previous publish is still in progress
+    if (mqtt_publish_in_progress) {
+        // If publish has been in progress for too long, assume it failed or queue is stuck
+        if (time_since_last_publish > (int64_t)MQTT_PUBLISH_DRAIN_TIMEOUT_MS) {
+            printf("[MQTT] Previous publish timeout - resetting state\n");
+            mqtt_publish_in_progress = false;
+            return true; // Allow retry
+        }
+        return false; // Still waiting for previous publish
+    }
+    
+    // Safe to publish
+    return true;
+}
+
+// ============================================================
+// Publish Message Helper with WiFi Check and Backpressure
+// ============================================================
+static bool mqtt_publish_message_safe(const char *topic, const char *payload) {
+    // BACKPRESSURE CHECK: Only publish if queue has drained
+    if (!mqtt_can_publish_now()) {
+        // Silently skip - this is normal flow control
+        return false;
+    }
+    
     // Check WiFi link first
     int wifi_status = cyw43_tcpip_link_status(&cyw43_state, CYW43_ITF_STA);
     
     if (wifi_status != CYW43_LINK_UP) {
         printf("[MQTT] WiFi disconnected (status=%d) — cannot publish to %s\n", wifi_status, topic);
-        return;
+        return false;
     }
     
     // Check if MQTT session is alive
     if (mqtt_client_is_connected(mqtt_client_instance) == 0) {
         printf("[MQTT] MQTT not connected — skipping publish to %s\n", topic);
-        return;
+        return false;
+    }
+    
+    // Mark publish as in progress BEFORE attempting
+    mqtt_publish_in_progress = true;
+    mqtt_last_publish_time = get_absolute_time();
+    
+    // Drain queue before publishing by processing events multiple times
+    for (int i = 0; i < 3; i++) {
+        robot_mqtt_process_events();
+        sleep_ms(10);
     }
     
     // Attempt publish
@@ -143,23 +204,42 @@ static void mqtt_publish_message_safe(const char *topic, const char *payload) {
     
     if (pub_err == ERR_OK) {
         printf("[MQTT] Published to %s: %s\n", topic, payload);
+        
+        // Drain queue after publish to help send immediately
+        for (int i = 0; i < 5; i++) {
+            robot_mqtt_process_events();
+            sleep_ms(5);
+        }
+        
+        // Mark publish as complete after a short delay (to allow TCP to queue)
+        // The actual completion will be detected by the minimum interval check
+        // Reset flag after a conservative time to allow queue to drain
+        // We'll reset it on next successful can_publish_now check
+        
     } else {
         printf("[MQTT] Publish failed to %s (error %d)\n", topic, pub_err);
+        mqtt_publish_in_progress = false; // Reset immediately on error
+        
         // Recheck WiFi
         int recheck = cyw43_tcpip_link_status(&cyw43_state, CYW43_ITF_STA);
         if (recheck != CYW43_LINK_UP) {
             printf("[MQTT] WiFi link lost, will reconnect on next cycle\n");
         }
+        return false;
     }
     
-    robot_mqtt_process_events();
+    // Reset in_progress flag after minimum interval (ensuring queue has time to drain)
+    // This will be checked on next call to can_publish_now()
+    // We keep it set to prevent rapid re-publishing
+    
+    return true;
 }
 
 // ============================================================
-// Public API: Publish Telemetry
+// Public API: Publish Telemetry (with backpressure control)
 // ============================================================
 void robot_send_telemetry_data(void) {
-    if (mqtt_client_is_connected(mqtt_client_instance) == 0) {
+    if (mqtt_client_instance == NULL || mqtt_client_is_connected(mqtt_client_instance) == 0) {
         return;
     }
     
@@ -179,8 +259,25 @@ void robot_send_telemetry_data(void) {
              (unsigned long)enc1, (unsigned long)enc2, m1, m2,
              (unsigned long)to_ms_since_boot(get_absolute_time()));
     
-    mqtt_publish_message_safe(MQTT_TOPIC_TELEMETRY, telemetry_payload);
-    telemetry_counter++;
+    // Attempt publish with backpressure checking
+    // This will return false if queue is full or too soon since last publish
+    if (mqtt_publish_message_safe(MQTT_TOPIC_TELEMETRY, telemetry_payload)) {
+        telemetry_counter++;
+    } else {
+        // Backpressure: skip this publish cycle
+        // Counter NOT incremented so we'll try same data next time
+    }
+    
+    // Update publish_in_progress flag: reset if enough time has passed
+    if (mqtt_publish_in_progress && !is_nil_time(mqtt_last_publish_time)) {
+        absolute_time_t now = get_absolute_time();
+        int64_t time_elapsed = absolute_time_diff_us(mqtt_last_publish_time, now) / 1000;
+        
+        // After minimum interval + small buffer, reset the flag to allow next publish
+        if (time_elapsed > (int64_t)(MQTT_MIN_PUBLISH_INTERVAL_MS + 100)) {
+            mqtt_publish_in_progress = false;
+        }
+    }
 }
 
 // ============================================================

@@ -81,7 +81,21 @@ void motors_stop(void) {
     pwm_set_gpio_level(ENB, 0);
 }
 
+// Legacy function (kept for compatibility)
 uint32_t encoder_pulse_width_us(int motor_index) {
     return (motor_index == 1) ? left_ticks :
            (motor_index == 2) ? right_ticks : 0;
+}
+
+// New function: Get accumulated encoder count
+uint32_t encoder_get_count(int motor_index) {
+    if (motor_index == 1) return left_ticks;
+    if (motor_index == 2) return right_ticks;
+    return 0;
+}
+
+// Optional: Reset encoder counts
+void encoder_reset_counts(void) {
+    left_ticks = 0;
+    right_ticks = 0;
 }

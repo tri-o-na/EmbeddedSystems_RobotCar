@@ -34,9 +34,11 @@ void lf_read(line_sample_t *s) {
         if (!last_black_start) last_black_start = now;
         s->black_us_left = now - last_black_start;
     } else {
-        // Sensor sees white — reset timer
-        if (last_black_start) black_duration = now - last_black_start;
-        s->black_us_left = black_duration;
+        // Sensor sees white — report 0 duration (don't keep stale data)
+        s->black_us_left = 0;
+        if (last_black_start) {
+            black_duration = now - last_black_start;
+        }
         last_black_start = 0;
     }
 }

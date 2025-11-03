@@ -14,7 +14,10 @@ barcode_cmd_t barcode_feed(barcode_cfg_t *cfg, uint64_t black_us) {
 
     static uint64_t last_long_time = 0;
 
-    if (black_us >= cfg->long_min_us) {
+    // Max barcode duration = 500ms. Anything longer is a continuous line, not a barcode
+    const uint32_t MAX_BARCODE_US = 500000;
+
+    if (black_us >= cfg->long_min_us && black_us <= MAX_BARCODE_US) {
         if (last_long_time && (now - last_long_time) < 600000) {
             last_long_time = 0;
             cfg->last_emit_us = now;

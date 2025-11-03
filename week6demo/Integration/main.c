@@ -87,12 +87,17 @@ int main() {
         lf_read(&ls);
 
         // === Line Following ===
+        float left_speed, right_speed;
         if (ls.left_on_line) {
             // On black line → go straight
-            motor_set(base_speed, base_speed);
+            left_speed = base_speed;
+            right_speed = base_speed;
+            motor_set(left_speed, right_speed);
         } else {
             // Off line → nudge left to find black
-            motor_set(base_speed, base_speed * 0.4f);
+            left_speed = base_speed;
+            right_speed = base_speed * 0.4f;
+            motor_set(left_speed, right_speed);
         }
 
         // === Barcode Detection ===
@@ -110,8 +115,10 @@ int main() {
         }
 
         // === Telemetry ===
-        printf("{\"adc\":%u,\"onLine\":%d,\"dur\":%lu,\"barcode\":\"%s\"}\n",
-               ls.adc_left, ls.left_on_line,
+        printf("ADC=%4u [THRESH=2000] %s | L=%.2f R=%.2f | Dur=%6lu us | BC=%s\n",
+               ls.adc_left,
+               ls.left_on_line ? "ON_BLACK " : "ON_WHITE ",
+               left_speed, right_speed,
                (unsigned long)ls.black_us_left,
                barcode_cmd_name(cmd));
 

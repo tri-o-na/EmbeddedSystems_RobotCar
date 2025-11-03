@@ -157,6 +157,8 @@ add_executable(Integration
     week6demo/Integration/imu_lis3dh.c
     week6demo/Integration/motor_encoder.c
     week6demo/Integration/pid.c
+    week6demo/Integration/line_follow.c
+    week6demo/Integration/barcode.c
 )
 
 target_include_directories(Integration PRIVATE
@@ -169,6 +171,7 @@ target_link_libraries(Integration
     hardware_pwm
     hardware_irq
     hardware_timer
+    hardware_adc
 )
 
 pico_enable_stdio_usb(Integration 1)

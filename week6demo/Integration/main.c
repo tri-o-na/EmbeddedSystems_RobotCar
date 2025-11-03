@@ -93,10 +93,10 @@ int main() {
             left_speed = base_speed;
             right_speed = base_speed;
             motor_set(left_speed, right_speed);
-        } else {
-            // Off line → nudge left to find black
-            left_speed = base_speed;
-            right_speed = base_speed * 0.4f;
+        } 
+        else {
+            left_speed = base_speed * 0.4f;
+            right_speed = base_speed;
             motor_set(left_speed, right_speed);
         }
 

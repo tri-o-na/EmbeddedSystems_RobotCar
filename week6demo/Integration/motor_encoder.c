@@ -1,135 +1,134 @@
 #include "motor_encoder.h"
-#include "pico/stdlib.h"
 #include "hardware/pwm.h"
 #include "hardware/irq.h"
-#include "hardware/timer.h"
 #include <stdio.h>
 
-#define M1A 8
-#define M1B 9
-#define M2A 10
-#define M2B 11
-#define ENC1_A 4 // Left encoder
-#define ENC2_A 6 // Right encoder
-#define PWM_WRAP 500u
-#define PWM_DIVIDER 4.0f
+#define IN1 8
+#define IN2 9
+#define IN3 10
+#define IN4 11
+#define ENA 12
+#define ENB 13
+#define ENC_LEFT 4
+#define ENC_RIGHT 6
 
-// Encoder pulse timing
-static volatile uint32_t enc1_last_rise_us = 0;
-static volatile uint32_t enc2_last_rise_us = 0;
-static volatile uint32_t enc1_pulse_us = 0;
-static volatile uint32_t enc2_pulse_us = 0;
+#define WRAP_VALUE 31250
+#define CLOCK_DIVIDER 4.0f
 
-// ==== Encoder interrupt ====
+static uint sliceA, sliceB;
+static volatile uint32_t left_ticks = 0;
+static volatile uint32_t right_ticks = 0;
+
 static void encoder_isr(uint gpio, uint32_t events)
 {
-    uint32_t now = to_us_since_boot(get_absolute_time());
-    if (gpio == ENC1_A)
-    {
-        if (events & GPIO_IRQ_EDGE_RISE)
-            enc1_last_rise_us = now;
-        else if ((events & GPIO_IRQ_EDGE_FALL) && enc1_last_rise_us)
-            enc1_pulse_us = now - enc1_last_rise_us;
-    }
-    else if (gpio == ENC2_A)
-    {
-        if (events & GPIO_IRQ_EDGE_RISE)
-            enc2_last_rise_us = now;
-        else if ((events & GPIO_IRQ_EDGE_FALL) && enc2_last_rise_us)
-            enc2_pulse_us = now - enc2_last_rise_us;
-    }
-}
-
-static void pwm_init_pin(uint gpio)
-{
-    gpio_set_function(gpio, GPIO_FUNC_PWM);
-    uint slice = pwm_gpio_to_slice_num(gpio);
-    pwm_config cfg = pwm_get_default_config();
-    pwm_config_set_clkdiv(&cfg, PWM_DIVIDER);
-    pwm_config_set_wrap(&cfg, PWM_WRAP);
-    pwm_init(slice, &cfg, true);
-    pwm_set_gpio_level(gpio, 0);
-}
-
-static inline uint16_t duty_from_float(float s)
-{
-    if (s < 0.0f)
-        s = -s;
-    if (s > 1.0f)
-        s = 1.0f;
-    return (uint16_t)(s * PWM_WRAP);
-}
-
-void motor_set(float m1, float m2)
-{
-    uint16_t d1 = duty_from_float(m1);
-    uint16_t d2 = duty_from_float(m2);
-
-    if (m1 > 0)
-    {
-        pwm_set_gpio_level(M1A, 0);
-        pwm_set_gpio_level(M1B, d1);
-    }
-    else if (m1 < 0)
-    {
-        pwm_set_gpio_level(M1A, d1);
-        pwm_set_gpio_level(M1B, 0);
-    }
-    else
-    {
-        pwm_set_gpio_level(M1A, 0);
-        pwm_set_gpio_level(M1B, 0);
-    }
-
-    if (m2 > 0)
-    {
-        pwm_set_gpio_level(M2A, d2);
-        pwm_set_gpio_level(M2B, 0);
-    }
-    else if (m2 < 0)
-    {
-        pwm_set_gpio_level(M2A, 0);
-        pwm_set_gpio_level(M2B, d2);
-    }
-    else
-    {
-        pwm_set_gpio_level(M2A, 0);
-        pwm_set_gpio_level(M2B, 0);
-    }
-}
-
-void motors_stop(void)
-{
-    motor_set(0.0f, 0.0f);
+    if (gpio == ENC_LEFT)
+        left_ticks++;
+    if (gpio == ENC_RIGHT)
+        right_ticks++;
 }
 
 void motors_and_encoders_init(void)
 {
-    pwm_init_pin(M1A);
-    pwm_init_pin(M1B);
-    pwm_init_pin(M2A);
-    pwm_init_pin(M2B);
+    // PWM setup for ENA and ENB (speed control)
+    gpio_set_function(ENA, GPIO_FUNC_PWM);
+    gpio_set_function(ENB, GPIO_FUNC_PWM);
+    sliceA = pwm_gpio_to_slice_num(ENA);
+    sliceB = pwm_gpio_to_slice_num(ENB);
 
-    gpio_init(ENC1_A);
-    gpio_set_dir(ENC1_A, GPIO_IN);
-    gpio_pull_up(ENC1_A);
-    gpio_init(ENC2_A);
-    gpio_set_dir(ENC2_A, GPIO_IN);
-    gpio_pull_up(ENC2_A);
+    pwm_config cfg = pwm_get_default_config();
+    pwm_config_set_clkdiv(&cfg, CLOCK_DIVIDER);
+    pwm_config_set_wrap(&cfg, WRAP_VALUE);
+    pwm_init(sliceA, &cfg, true);
+    pwm_init(sliceB, &cfg, true);
+    pwm_set_gpio_level(ENA, 0); // Start stopped
+    pwm_set_gpio_level(ENB, 0); // Start stopped
 
-    gpio_set_irq_enabled_with_callback(ENC1_A,
-                                       GPIO_IRQ_EDGE_RISE | GPIO_IRQ_EDGE_FALL, true, &encoder_isr);
-    gpio_set_irq_enabled(ENC2_A,
-                         GPIO_IRQ_EDGE_RISE | GPIO_IRQ_EDGE_FALL, true);
+    // Direction pins - configure as GPIO outputs
+    gpio_init(IN1);
+    gpio_set_dir(IN1, GPIO_OUT);
+    gpio_init(IN2);
+    gpio_set_dir(IN2, GPIO_OUT);
+    gpio_init(IN3);
+    gpio_set_dir(IN3, GPIO_OUT);
+    gpio_init(IN4);
+    gpio_set_dir(IN4, GPIO_OUT);
 
-    printf("Motors + Encoders initialized.\n");
+    // Set direction for FORWARD motion (and keep it fixed)
+    // Left motor: IN1=LOW, IN2=HIGH = forward
+    gpio_put(IN1, 0);
+    gpio_put(IN2, 1);
+
+    // Right motor: IN3=HIGH, IN4=LOW = forward
+    gpio_put(IN3, 1);
+    gpio_put(IN4, 0);
+
+    // Encoder pins
+    gpio_init(ENC_LEFT);
+    gpio_set_dir(ENC_LEFT, GPIO_IN);
+    gpio_pull_up(ENC_LEFT);
+    gpio_init(ENC_RIGHT);
+    gpio_set_dir(ENC_RIGHT, GPIO_IN);
+    gpio_pull_up(ENC_RIGHT);
+
+    gpio_set_irq_enabled_with_callback(ENC_LEFT, GPIO_IRQ_EDGE_RISE, true, &encoder_isr);
+    gpio_set_irq_enabled_with_callback(ENC_RIGHT, GPIO_IRQ_EDGE_RISE, true, &encoder_isr);
+
+    printf("Motors and encoders initialized.\n");
+    printf("Direction set to FORWARD (fixed)\n");
+    printf("Speed controlled via PWM on ENA (pin %d) and ENB (pin %d)\n", ENA, ENB);
 }
 
+void motor_set(float left, float right)
+{
+    // Clamp values to [0, 1]
+    if (left < 0)
+        left = 0;
+    if (right < 0)
+        right = 0;
+    if (left > 1)
+        left = 1;
+    if (right > 1)
+        right = 1;
+
+    // DON'T touch direction pins here - they're already set in init
+    // Just control speed via PWM duty cycle
+    pwm_set_gpio_level(ENA, (uint16_t)(left * WRAP_VALUE));
+    pwm_set_gpio_level(ENB, (uint16_t)(right * WRAP_VALUE));
+}
+
+void motors_stop(void)
+{
+    // Stop motors by setting PWM to 0
+    pwm_set_gpio_level(ENA, 0);
+    pwm_set_gpio_level(ENB, 0);
+
+    // Optional: also set direction pins to brake mode
+    // gpio_put(IN1, 0);
+    // gpio_put(IN2, 0);
+    // gpio_put(IN3, 0);
+    // gpio_put(IN4, 0);
+}
+
+// Legacy function (kept for compatibility)
 uint32_t encoder_pulse_width_us(int motor_index)
 {
+    return (motor_index == 1) ? left_ticks : (motor_index == 2) ? right_ticks
+                                                                : 0;
+}
+
+// Get accumulated encoder count
+uint32_t encoder_get_count(int motor_index)
+{
     if (motor_index == 1)
-        return enc1_pulse_us;
+        return left_ticks;
     if (motor_index == 2)
-        return enc2_pulse_us;
+        return right_ticks;
     return 0;
+}
+
+// Reset encoder counts
+void encoder_reset_counts(void)
+{
+    left_ticks = 0;
+    right_ticks = 0;
 }

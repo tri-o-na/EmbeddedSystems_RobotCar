@@ -52,19 +52,36 @@ function connectMQTT() {
             updateConnectionStatus(true, "Connected");
             document.getElementById("statusText").innerText = "Connected to MQTT Broker";
             
-            // Subscribe to robot telemetry topic
+            // Subscribe to robot topics
             brokerConnection.subscribe("robot/telemetry", (err) => {
                 if (err) {
                     console.error("Subscription error:", err);
                 } else {
                     console.log("✓ Subscribed to robot/telemetry");
-                    showCommandStatus("Connected and subscribed!", "success");
-                    setTimeout(() => {
-                        document.getElementById('commandStatus').textContent = '';
-                        document.getElementById('commandStatus').className = 'command-status';
-                    }, 2000);
                 }
             });
+            
+            brokerConnection.subscribe("robot/line_sensor", (err) => {
+                if (err) {
+                    console.error("Subscription error:", err);
+                } else {
+                    console.log("✓ Subscribed to robot/line_sensor");
+                }
+            });
+            
+            brokerConnection.subscribe("robot/barcode", (err) => {
+                if (err) {
+                    console.error("Subscription error:", err);
+                } else {
+                    console.log("✓ Subscribed to robot/barcode");
+                }
+            });
+            
+            showCommandStatus("Connected and subscribed!", "success");
+            setTimeout(() => {
+                document.getElementById('commandStatus').textContent = '';
+                document.getElementById('commandStatus').className = 'command-status';
+            }, 2000);
         });
         
         // Connection error callback
@@ -121,6 +138,37 @@ function connectMQTT() {
                     }
                     console.log("Robot telemetry:", parsedData);
                     updateLastUpdateTime();
+                    break;
+                    
+                // ------------------ Line Sensor Data ------------------
+                case "robot/line_sensor":
+                    if (parsedData.adc !== undefined) {
+                        document.getElementById('lineADC').textContent = parsedData.adc;
+                    }
+                    if (parsedData.on_line !== undefined) {
+                        const onLineEl = document.getElementById('onLine');
+                        onLineEl.textContent = parsedData.on_line ? "Yes" : "No";
+                        onLineEl.style.color = parsedData.on_line ? "#10b981" : "#ef4444";
+                    }
+                    if (parsedData.error !== undefined) {
+                        document.getElementById('lineError').textContent = parsedData.error.toFixed(3);
+                    }
+                    if (parsedData.correction !== undefined) {
+                        document.getElementById('lineCorrection').textContent = parsedData.correction.toFixed(3);
+                    }
+                    console.log("Line sensor data:", parsedData);
+                    break;
+                    
+                // ------------------ Barcode Data ------------------
+                case "robot/barcode":
+                    if (parsedData.message !== undefined) {
+                        document.getElementById('barcodeMessage').textContent = parsedData.message;
+                        document.getElementById('barcodeMessage').style.color = "#10b981";
+                    }
+                    if (parsedData.length !== undefined) {
+                        document.getElementById('barcodeLength').textContent = parsedData.length;
+                    }
+                    console.log("Barcode decoded:", parsedData);
                     break;
 
                 // ------------------ Motion & IMU ------------------
@@ -382,8 +430,8 @@ function sendDirection(direction, event) {
     // Adjust these values if the car drifts left/right when going "straight"
     // If car drifts RIGHT: increase m1 (left motor) or decrease m2 (right motor)
     // If car drifts LEFT: decrease m1 (left motor) or increase m2 (right motor)
-    const STRAIGHT_M1 = 0.55;  // Left motor (may need boost)
-    const STRAIGHT_M2 = 0.45;  // Right motor (may need less)
+    const STRAIGHT_M1 = 0.80;  // Left motor (increased for more power)
+    const STRAIGHT_M2 = 0.80;  // Right motor (increased for more power)
     
     // Set motor values based on direction
     switch(direction) {
@@ -398,13 +446,13 @@ function sendDirection(direction, event) {
             directionName = "Backward";
             break;
         case 'clockwise':
-            m1 = 0.5;
-            m2 = -0.5;
+            m1 = 0.8;  // Increased rotation speed
+            m2 = -0.8;
             directionName = "Clockwise";
             break;
         case 'anticlockwise':
-            m1 = -0.5;
-            m2 = 0.5;
+            m1 = -0.8;  // Increased rotation speed
+            m2 = 0.8;
             directionName = "Anticlockwise";
             break;
         default:
@@ -498,4 +546,86 @@ document.addEventListener('DOMContentLoaded', function() {
         motor2Slider.addEventListener('touchend', sendMotorCommand);
     }
 });
+
+// ============================================================
+// Line Following Functions
+// ============================================================
+function enableLineFollowing() {
+    if (!isConnectedToBroker || !brokerConnection) {
+        showCommandStatus("Not connected to MQTT broker", "error");
+        return;
+    }
+    
+    const command = JSON.stringify({ mode: "line_follow" });
+    brokerConnection.publish("robot/commands", command, { qos: 0 }, (err) => {
+        if (err) {
+            showCommandStatus("Failed to enable line following", "error");
+        } else {
+            showCommandStatus("✅ Line following mode enabled", "success");
+            document.getElementById('modeStatus').textContent = "Mode: Line Following";
+            document.getElementById('lineFollowBtn').classList.add('active');
+            document.getElementById('manualBtn').classList.remove('active');
+        }
+    });
+}
+
+function enableManualMode() {
+    if (!isConnectedToBroker || !brokerConnection) {
+        showCommandStatus("Not connected to MQTT broker", "error");
+        return;
+    }
+    
+    const command = JSON.stringify({ mode: "manual" });
+    brokerConnection.publish("robot/commands", command, { qos: 0 }, (err) => {
+        if (err) {
+            showCommandStatus("Failed to enable manual mode", "error");
+        } else {
+            showCommandStatus("✅ Manual control mode enabled", "success");
+            document.getElementById('modeStatus').textContent = "Mode: Manual";
+            document.getElementById('manualBtn').classList.add('active');
+            document.getElementById('lineFollowBtn').classList.remove('active');
+        }
+    });
+}
+
+// ============================================================
+// Barcode Functions
+// ============================================================
+function enableBarcode() {
+    if (!isConnectedToBroker || !brokerConnection) {
+        showCommandStatus("Not connected to MQTT broker", "error");
+        return;
+    }
+    
+    const command = JSON.stringify({ mode: "barcode", barcode: "enable" });
+    brokerConnection.publish("robot/commands", command, { qos: 0 }, (err) => {
+        if (err) {
+            showCommandStatus("Failed to enable barcode", "error");
+        } else {
+            showCommandStatus("✅ Barcode tracking enabled", "success");
+            document.getElementById('barcodeEnableBtn').classList.add('active');
+            document.getElementById('barcodeDisableBtn').classList.remove('active');
+        }
+    });
+}
+
+function disableBarcode() {
+    if (!isConnectedToBroker || !brokerConnection) {
+        showCommandStatus("Not connected to MQTT broker", "error");
+        return;
+    }
+    
+    const command = JSON.stringify({ mode: "barcode", barcode: "disable" });
+    brokerConnection.publish("robot/commands", command, { qos: 0 }, (err) => {
+        if (err) {
+            showCommandStatus("Failed to disable barcode", "error");
+        } else {
+            showCommandStatus("Barcode tracking disabled", "success");
+            document.getElementById('barcodeDisableBtn').classList.add('active');
+            document.getElementById('barcodeEnableBtn').classList.remove('active');
+            document.getElementById('barcodeMessage').textContent = "--";
+            document.getElementById('barcodeLength').textContent = "0";
+        }
+    });
+}
 

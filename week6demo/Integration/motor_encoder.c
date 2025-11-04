@@ -53,13 +53,11 @@ void motors_and_encoders_init(void)
     gpio_init(IN4);
     gpio_set_dir(IN4, GPIO_OUT);
 
-    // Set direction for FORWARD motion (and keep it fixed)
-    // Left motor: IN1=LOW, IN2=HIGH = forward
+    // CRITICAL: Set ALL direction pins to LOW for BRAKE MODE on startup
+    // This prevents any motor movement until motor_set() is called
     gpio_put(IN1, 0);
-    gpio_put(IN2, 1);
-
-    // Right motor: IN3=HIGH, IN4=LOW = forward
-    gpio_put(IN3, 1);
+    gpio_put(IN2, 0);
+    gpio_put(IN3, 0);
     gpio_put(IN4, 0);
 
     // Encoder pins
@@ -74,8 +72,9 @@ void motors_and_encoders_init(void)
     gpio_set_irq_enabled_with_callback(ENC_RIGHT, GPIO_IRQ_EDGE_RISE, true, &encoder_isr);
 
     printf("Motors and encoders initialized.\n");
-    printf("Direction set to FORWARD (fixed)\n");
+    printf("Direction pins set to BRAKE MODE (all LOW)\n");
     printf("Speed controlled via PWM on ENA (pin %d) and ENB (pin %d)\n", ENA, ENB);
+    printf("Motors will NOT move until motor_set() is called\n");
 }
 
 void motor_set(float left, float right)
@@ -94,28 +93,39 @@ void motor_set(float left, float right)
     float left_speed = (left < 0) ? -left : left;
     float right_speed = (right < 0) ? -right : right;
     
+    // Debug output
+    printf("[MOTOR] Set: L=%.2f R=%.2f | Speed: L=%.2f R=%.2f\n", left, right, left_speed, right_speed);
+    
     // Set direction pins based on sign
     // Left motor: IN1=LOW, IN2=HIGH = forward | IN1=HIGH, IN2=LOW = backward
     if (left >= 0) {
         gpio_put(IN1, 0);
         gpio_put(IN2, 1);  // Forward
+        printf("[MOTOR] Left motor: FORWARD\n");
     } else {
         gpio_put(IN1, 1);
         gpio_put(IN2, 0);  // Backward
+        printf("[MOTOR] Left motor: BACKWARD\n");
     }
     
     // Right motor: IN3=HIGH, IN4=LOW = forward | IN3=LOW, IN4=HIGH = backward
     if (right >= 0) {
         gpio_put(IN3, 1);
         gpio_put(IN4, 0);  // Forward
+        printf("[MOTOR] Right motor: FORWARD\n");
     } else {
         gpio_put(IN3, 0);
         gpio_put(IN4, 1);  // Backward
+        printf("[MOTOR] Right motor: BACKWARD\n");
     }
     
     // Control speed via PWM duty cycle (0 to 1)
-    pwm_set_gpio_level(ENA, (uint16_t)(left_speed * WRAP_VALUE));
-    pwm_set_gpio_level(ENB, (uint16_t)(right_speed * WRAP_VALUE));
+    uint16_t left_pwm = (uint16_t)(left_speed * WRAP_VALUE);
+    uint16_t right_pwm = (uint16_t)(right_speed * WRAP_VALUE);
+    pwm_set_gpio_level(ENA, left_pwm);
+    pwm_set_gpio_level(ENB, right_pwm);
+    
+    printf("[MOTOR] PWM levels: ENA=%u ENB=%u (max=%u)\n", left_pwm, right_pwm, WRAP_VALUE);
 }
 
 void motors_stop(void)
@@ -124,11 +134,11 @@ void motors_stop(void)
     pwm_set_gpio_level(ENA, 0);
     pwm_set_gpio_level(ENB, 0);
 
-    // Optional: also set direction pins to brake mode
-    // gpio_put(IN1, 0);
-    // gpio_put(IN2, 0);
-    // gpio_put(IN3, 0);
-    // gpio_put(IN4, 0);
+    // Set direction pins to brake mode for complete stop
+    gpio_put(IN1, 0);
+    gpio_put(IN2, 0);
+    gpio_put(IN3, 0);
+    gpio_put(IN4, 0);
 }
 
 // Legacy function (kept for compatibility)

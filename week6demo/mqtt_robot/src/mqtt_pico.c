@@ -73,7 +73,7 @@ static void mqtt_conn_status_callback(mqtt_client_t *client,
         
         // Subscribe to commands topic after successful connection
         printf("[MQTT] Subscribing to topic: %s\n", MQTT_TOPIC_COMMANDS);
-        err_t sub_err = mqtt_sub_unsub(client, MQTT_TOPIC_COMMANDS, 0, NULL, NULL, 0);
+        err_t sub_err = mqtt_sub_unsub(client, MQTT_TOPIC_COMMANDS, 0, NULL, NULL, 1);  // Changed 0 to 1 for SUBSCRIBE
         if (sub_err == ERR_OK) {
             printf("[MQTT] Subscription request sent successfully\n");
         } else {
@@ -168,7 +168,7 @@ static bool mqtt_can_publish_now(void) {
 // ============================================================
 // Publish Message Helper with WiFi Check and Backpressure
 // ============================================================
-static bool mqtt_publish_message_safe(const char *topic, const char *payload) {
+bool mqtt_publish_message_safe(const char *topic, const char *payload) {
     // BACKPRESSURE CHECK: Only publish if queue has drained
     if (!mqtt_can_publish_now()) {
         // Silently skip - this is normal flow control

@@ -11,6 +11,9 @@
 #include "mqtt_client.h"  // Also includes WiFi credentials
 #include "mqtt_config.h"
 #include "motor_encoder.h"  // Motor and encoder functions
+#include "barcode.h"
+#include "line_follow.h"
+#include "pid.h"
 
 // External reference to cyw43_state (defined in cyw43_arch)
 extern cyw43_t cyw43_state;
@@ -19,57 +22,109 @@ extern cyw43_t cyw43_state;
 static float current_m1 = 0.0f;
 static float current_m2 = 0.0f;
 
+// Line following mode state
+static bool line_following_enabled = false;
+static PID line_follow_pid;
+static uint64_t last_seen_black_time = 0;
+static int last_turn_dir = 0; // -1 = left, +1 = right, 0 = straight
+static const float LINE_FOLLOW_BASE_SPEED = 0.30f;
+
+// Barcode tracking state
+static bool barcode_tracking_enabled = false;
+
 // Function to get current motor speeds (for telemetry)
 void get_current_motor_speeds(float *m1, float *m2) {
     *m1 = current_m1;
     *m2 = current_m2;
 }
 
+// Forward declaration for MQTT publish
+extern bool mqtt_publish_message_safe(const char *topic, const char *payload);
+
+// External reference to barcode decoded message
+extern char decoded_message[];
+extern int message_length;
+
 // Command handler - processes incoming MQTT commands
 void process_robot_commands(const char *topic, const char *payload, int len) {
     printf("MQTT Command received on topic '%s': %.*s\n", topic, len, payload);
     
-    // Parse JSON and call motor_set() with received values
-    if (strstr(payload, "\"m1\"") != NULL || strstr(payload, "\"m2\"") != NULL) {
-        // Extract motor values
-        float m1 = 0.0f, m2 = 0.0f;
-        char *m1_pos = strstr(payload, "\"m1\"");
-        char *m2_pos = strstr(payload, "\"m2\"");
-        
-        if (m1_pos) {
-            m1_pos = strchr(m1_pos, ':');
-            if (m1_pos) {
-                m1 = strtof(m1_pos + 1, NULL);
-            }
-        }
-        if (m2_pos) {
-            m2_pos = strchr(m2_pos, ':');
-            if (m2_pos) {
-                m2 = strtof(m2_pos + 1, NULL);
-            }
-        }
-        
-        // Clamp values to safe range
-        if (m1 > 1.0f) m1 = 1.0f;
-        if (m1 < -1.0f) m1 = -1.0f;
-        if (m2 > 1.0f) m2 = 1.0f;
-        if (m2 < -1.0f) m2 = -1.0f;
-        
-        printf("  Parsed command: m1=%.2f, m2=%.2f\n", m1, m2);
-        
-        // Actually control the motors!
-        motor_set(m1, m2);
-        current_m1 = m1;
-        current_m2 = m2;
-        
-        printf("  Motors set: m1=%.2f, m2=%.2f\n", m1, m2);
-    } else if (strstr(payload, "\"action\"") != NULL) {
-        if (strstr(payload, "stop") != NULL) {
-            printf("  Emergency stop command received\n");
+    // Check for mode commands first
+    if (strstr(payload, "\"mode\"") != NULL) {
+        if (strstr(payload, "\"line_follow\"") != NULL || strstr(payload, "\"line_following\"") != NULL) {
+            line_following_enabled = true;
+            printf("  Line following mode ENABLED\n");
+            pid_init(&line_follow_pid, 0.08f, 0.00f, 0.002f, -0.25f, 0.25f);
+            line_follow_pid.setpoint = 1.0f; // want to always see black (1.0)
+            last_seen_black_time = time_us_64();
+            last_turn_dir = 0;
+        } else if (strstr(payload, "\"manual\"") != NULL) {
+            line_following_enabled = false;
+            printf("  Manual control mode ENABLED\n");
             motors_stop();
             current_m1 = 0.0f;
             current_m2 = 0.0f;
-            printf("  Motors stopped\n");
+        }
+        if (strstr(payload, "\"barcode\"") != NULL) {
+            if (strstr(payload, "\"enable\"") != NULL || strstr(payload, "true") != NULL) {
+                barcode_tracking_enabled = true;
+                reset_message();
+                printf("  Barcode tracking ENABLED\n");
+            } else {
+                barcode_tracking_enabled = false;
+                printf("  Barcode tracking DISABLED\n");
+            }
+        }
+        return; // Don't process motor commands when changing mode
+    }
+    
+    // Emergency stop ALWAYS works, regardless of mode
+    if (strstr(payload, "\"action\"") != NULL && strstr(payload, "stop") != NULL) {
+        printf("  Emergency stop command received\n");
+        line_following_enabled = false;  // Disable line following on emergency stop
+        motors_stop();
+        current_m1 = 0.0f;
+        current_m2 = 0.0f;
+        printf("  Motors stopped\n");
+        return;
+    }
+    
+    // Only process motor commands if not in line following mode
+    if (!line_following_enabled) {
+        // Parse JSON and call motor_set() with received values
+        if (strstr(payload, "\"m1\"") != NULL || strstr(payload, "\"m2\"") != NULL) {
+            // Extract motor values
+            float m1 = 0.0f, m2 = 0.0f;
+            char *m1_pos = strstr(payload, "\"m1\"");
+            char *m2_pos = strstr(payload, "\"m2\"");
+            
+            if (m1_pos) {
+                m1_pos = strchr(m1_pos, ':');
+                if (m1_pos) {
+                    m1 = strtof(m1_pos + 1, NULL);
+                }
+            }
+            if (m2_pos) {
+                m2_pos = strchr(m2_pos, ':');
+                if (m2_pos) {
+                    m2 = strtof(m2_pos + 1, NULL);
+                }
+            }
+            
+            // Clamp values to safe range
+            if (m1 > 1.0f) m1 = 1.0f;
+            if (m1 < -1.0f) m1 = -1.0f;
+            if (m2 > 1.0f) m2 = 1.0f;
+            if (m2 < -1.0f) m2 = -1.0f;
+            
+            printf("  Parsed command: m1=%.2f, m2=%.2f\n", m1, m2);
+            
+            // Actually control the motors!
+            motor_set(m1, m2);
+            current_m1 = m1;
+            current_m2 = m2;
+            
+            printf("  Motors set: m1=%.2f, m2=%.2f\n", m1, m2);
         }
     }
 }
@@ -89,6 +144,18 @@ int main() {
     // Initialize motors and encoders FIRST (before WiFi)
     motors_and_encoders_init();
     motors_stop();  // Start with motors stopped
+    
+    // Ensure line following is disabled on startup
+    line_following_enabled = false;
+    current_m1 = 0.0f;
+    current_m2 = 0.0f;
+    
+    // Initialize line following sensor
+    printf("Step 1a: Initializing line following sensor...\n");
+    lf_init();
+    
+    // Initialize barcode sensor (GPIO already configured in barcode.c)
+    printf("Step 1b: Barcode sensor ready (GPIO %d)\n", BARCODE_IR_SENSOR_PIN);
     
     printf("Step 2: Testing LED...\n");
     
@@ -214,6 +281,117 @@ int main() {
                 }
             }
             last_connection_check = get_absolute_time();
+        }
+        
+        // Safety check: Only stop motors if they're supposed to be at zero
+        // This check runs every loop but only stops if values are actually zero
+        if (!line_following_enabled && current_m1 == 0.0f && current_m2 == 0.0f) {
+            // Only call motors_stop once to avoid excessive GPIO writes
+            static bool last_was_stopped = false;
+            if (!last_was_stopped) {
+                motors_stop();
+                last_was_stopped = true;
+            }
+        } else {
+            static bool last_was_stopped = false;
+            last_was_stopped = false;  // Reset flag when motors are active
+        }
+        
+        // Line following control loop (if enabled)
+        if (line_following_enabled) {
+            line_sample_t ls;
+            lf_read(&ls);
+            uint64_t now_us = time_us_64();
+            
+            // Convert sensor to analog-like input for PID
+            float sensor_val = ls.left_on_line ? 1.0f : 0.0f;
+            float error = line_follow_pid.setpoint - sensor_val;
+            float correction = pid_update(&line_follow_pid, error);
+            
+            float left_speed = 0.0f, right_speed = 0.0f;
+            
+            if (ls.left_on_line) {
+                // On black line → go straight, apply PID correction
+                left_speed = LINE_FOLLOW_BASE_SPEED - correction;
+                right_speed = LINE_FOLLOW_BASE_SPEED + correction;
+                last_seen_black_time = now_us;
+                
+                // Track last turn direction
+                if (correction > 0.01f)
+                    last_turn_dir = +1;   // drifting right → needs left correction
+                else if (correction < -0.01f)
+                    last_turn_dir = -1;   // drifting left → needs right correction
+            } else {
+                // Off the line - recovery logic
+                uint64_t lost_duration = now_us - last_seen_black_time;
+                
+                if (lost_duration < 300000) {  // 300ms
+                    // Short-term drift → steer using last known direction
+                    if (last_turn_dir == -1) {
+                        left_speed = LINE_FOLLOW_BASE_SPEED * 0.25f;
+                        right_speed = LINE_FOLLOW_BASE_SPEED * 1.1f;
+                    } else {
+                        left_speed = LINE_FOLLOW_BASE_SPEED * 1.0f;
+                        right_speed = LINE_FOLLOW_BASE_SPEED * 0.5f;
+                    }
+                } else {
+                    // Lost line - try to recover
+                    bool found = false;
+                    // Try right turn
+                    for (int i = 0; i < 15; i++) {
+                        motor_set(0.3f, -0.3f);
+                        sleep_ms(25);
+                        lf_read(&ls);
+                        if (ls.left_on_line) { found = true; break; }
+                    }
+                    // Try left turn if not found
+                    if (!found) {
+                        for (int i = 0; i < 25; i++) {
+                            motor_set(-0.3f, 0.3f);
+                            sleep_ms(25);
+                            lf_read(&ls);
+                            if (ls.left_on_line) { found = true; break; }
+                        }
+                    }
+                    if (!found) {
+                        // Reverse briefly
+                        motor_set(-0.25f, -0.25f);
+                        sleep_ms(200);
+                    }
+                    continue; // Skip motor_set below, already handled in recovery
+                }
+            }
+            
+            // Apply computed motor speeds
+            motor_set(left_speed, right_speed);
+            current_m1 = left_speed;
+            current_m2 = right_speed;
+            
+            // Publish line sensor data (more frequently than telemetry)
+            if (robot_mqtt_check_connection() && (now - last_telemetry > 200)) {
+                char line_payload[128];
+                snprintf(line_payload, sizeof(line_payload),
+                         "{\"adc\":%u,\"on_line\":%d,\"error\":%.3f,\"correction\":%.3f,\"ts\":%lu}",
+                         ls.adc_left, ls.left_on_line ? 1 : 0, error, correction,
+                         (unsigned long)now);
+                mqtt_publish_message_safe(MQTT_TOPIC_LINE_SENSOR, line_payload);
+            }
+        }
+        
+        // Barcode tracking (if enabled) - publish decoded messages
+        if (barcode_tracking_enabled) {
+            static int last_message_length = 0;
+            if (message_length > 0 && message_length != last_message_length) {
+                // New message decoded - publish it
+                char barcode_payload[128];
+                snprintf(barcode_payload, sizeof(barcode_payload),
+                         "{\"message\":\"%s\",\"length\":%d,\"ts\":%lu}",
+                         decoded_message, message_length,
+                         (unsigned long)now);
+                mqtt_publish_message_safe(MQTT_TOPIC_BARCODE, barcode_payload);
+                last_message_length = message_length;
+                printf("[BARCODE] Published: %s\n", decoded_message);
+            }
         }
         
         // Publish telemetry periodically (backpressure checking is done inside)

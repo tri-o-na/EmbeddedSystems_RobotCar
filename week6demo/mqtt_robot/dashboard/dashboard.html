@@ -33,14 +33,6 @@
                         <span id="enc2">--</span>
                     </div>
                     <div class="data-item">
-                        <label>Motor 1 Speed:</label>
-                        <span id="m1">--</span>
-                    </div>
-                    <div class="data-item">
-                        <label>Motor 2 Speed:</label>
-                        <span id="m2">--</span>
-                    </div>
-                    <div class="data-item">
                         <label>Timestamp:</label>
                         <span id="timestamp">--</span>
                     </div>
@@ -74,15 +66,15 @@
                 <!-- Directional Control Buttons -->
                 <div class="directional-controls">
                     <div class="direction-buttons">
-                        <button onclick="sendDirection('straight', event)" >
+                        <button onclick="sendDirection('straight', event)">
                             <span class="direction-indicator"></span>
                             <span class="direction-text">⬆️ Straight</span>
                         </button>
-                        <button onclick="sendDirection('backward', event)" >
+                        <button onclick="sendDirection('backward', event)">
                             <span class="direction-indicator"></span>
                             <span class="direction-text">⬇️ Backward</span>
                         </button>
-                        <button onclick="sendDirection('clockwise', event)" >
+                        <button onclick="sendDirection('clockwise', event)">
                             <span class="direction-indicator"></span>
                             <span class="direction-text">↻ Clockwise</span>
                         </button>
@@ -94,6 +86,56 @@
                 </div>
 
                 <div class="command-status" id="commandStatus"></div>
+            </section>
+
+            <!-- Line Following Section -->
+            <section class="line-follow-panel">
+                <h2>Line Following</h2>
+                <div class="mode-controls">
+                    <button onclick="enableLineFollowing()" id="lineFollowBtn" class="btn-mode">Enable Line
+                        Following</button>
+                    <button onclick="enableManualMode()" id="manualBtn" class="btn-mode">Manual Control</button>
+                </div>
+                <div class="line-sensor-data">
+                    <div class="data-item">
+                        <label>ADC Value:</label>
+                        <span id="lineADC">--</span>
+                    </div>
+                    <div class="data-item">
+                        <label>On Line:</label>
+                        <span id="onLine">--</span>
+                    </div>
+                    <div class="data-item">
+                        <label>Error:</label>
+                        <span id="lineError">--</span>
+                    </div>
+                    <div class="data-item">
+                        <label>Correction:</label>
+                        <span id="lineCorrection">--</span>
+                    </div>
+                </div>
+                <div class="mode-status">
+                    <span id="modeStatus">Mode: Manual</span>
+                </div>
+            </section>
+
+            <!-- Barcode Section -->
+            <section class="barcode-panel">
+                <h2>Barcode Reader</h2>
+                <div class="barcode-controls">
+                    <button onclick="enableBarcode()" id="barcodeEnableBtn" class="btn-mode">Enable Barcode</button>
+                    <button onclick="disableBarcode()" id="barcodeDisableBtn" class="btn-mode">Disable Barcode</button>
+                </div>
+                <div class="barcode-display">
+                    <div class="barcode-message">
+                        <label>Decoded Message:</label>
+                        <div id="barcodeMessage" class="barcode-text">--</div>
+                    </div>
+                    <div class="data-item">
+                        <label>Message Length:</label>
+                        <span id="barcodeLength">0</span>
+                    </div>
+                </div>
             </section>
         </div>
 

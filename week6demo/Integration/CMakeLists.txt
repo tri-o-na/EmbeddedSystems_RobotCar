@@ -3,11 +3,15 @@ add_executable(Integration
     imu_mpu6050.c
     motor_encoder.c
     pid.c
+    line_follow.c
+    barcode.c
 )
 
 target_link_libraries(Integration
     pico_stdlib
     hardware_i2c
+    hardware_pwm
+    hardware_adc
     hardware_pwm
 )
 

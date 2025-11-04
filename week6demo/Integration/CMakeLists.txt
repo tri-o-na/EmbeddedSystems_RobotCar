@@ -11,7 +11,8 @@ target_link_libraries(Integration
     pico_stdlib
     hardware_i2c
     hardware_pwm
-    hardware_ad
+    hardware_adc
+    hardware_pwm
 )
 
 pico_enable_stdio_usb(Integration 1)

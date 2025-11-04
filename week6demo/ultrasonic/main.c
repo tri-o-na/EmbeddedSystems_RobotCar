@@ -1,25 +1,34 @@
 #include "pico/stdlib.h"
-#include "imu_lis3dh.h"
 #include "motor_encoder.h"
-#include "pid.h"
 #include "ultrasonic.h"
 #include "servo.h"
-#include "servo.h" // <-- Add this include
-
-#include "hardware/pwm.h"
+#include "imu_lis3dh.h"
 #include <stdio.h>
 #include <math.h>
-#include <stdlib.h>
 
 #define SERVO_PIN 15
 #define TRIG_PIN 0
 #define ECHO_PIN 1
 
-#define DETECTION_RANGE_CM 17.0   // Stop and scan at this distance
-#define OBJECT_EDGE_THRESHOLD 40.0   // cm
-#define REVERSE_TIME_MS 500    // ms
-#define BYPASS_TIME_MS 6000    // ms
-#define SMALL_TURN_TIME_MS 360 // ms, for ~15 degree turn
+#define DETECTION_RANGE_CM 45.0f      // Stop and scan when obstacle within 40cm
+#define OBJECT_EDGE_THRESHOLD 55.0f   // Consider "clear" if reading ≥55cm
+#define REVERSE_TIME_MS 500
+#define BYPASS_TIME_MS 6000
+#define SMALL_TURN_TIME_MS 100        // ms, for ~15 degree turn
+
+// Speed profile
+const float base_speed = -0.05f;
+
+#define APPROACH_MIN_SPEED   (base_speed * 0.6f)
+#define TURN_SPEED           (base_speed * 0.8f)
+#define REVERSE_SPEED        (base_speed * 0.8f)
+
+#define SLOWDOWN_START_CM    60.0f
+#define EMERGENCY_STOP_CM    12.0f
+#define ULTRASONIC_CHECK_DELAY_MS 10
+
+// IMU heading control
+#define HEADING_TOLERANCE 2.0f
 
 static float get_distance_reading() {
     return get_stable_distance_cm(TRIG_PIN, ECHO_PIN);
@@ -59,7 +68,7 @@ static ScanResult scan_for_max_clearance(bool scan_left) {
             printf("%.1f ", d);
             if (d == -1.0f) minus_one_count++;
             if (d > max_distance) max_distance = d;
-            if (d >= OBJECT_EDGE_THRESHOLD) break;
+            if (d >= OBJECT_EDGE_THRESHOLD) break;  // Add this line!
         }
     }
 
@@ -68,36 +77,68 @@ static ScanResult scan_for_max_clearance(bool scan_left) {
     return result;
 }
 
+static float clampf(float v, float lo, float hi) {
+    if (v < lo) return lo;
+    if (v > hi) return hi;
+    return v;
+}
+
+static float approach_speed(float dist_cm) {
+    if (dist_cm <= 0) return base_speed;
+    if (dist_cm <= DETECTION_RANGE_CM) return APPROACH_MIN_SPEED;
+    if (dist_cm >= SLOWDOWN_START_CM) return base_speed;
+
+    float t = (dist_cm - DETECTION_RANGE_CM) / (SLOWDOWN_START_CM - DETECTION_RANGE_CM);
+    t = clampf(t, 0.0f, 1.0f);
+    return APPROACH_MIN_SPEED + t * (base_speed - APPROACH_MIN_SPEED);
+}
+
 int main() {
     stdio_init_all();
     sleep_ms(500);
-    printf("=== Demo: IMU+PID Forward + Servo Obstacle Avoidance (FIXED v2) ===\n");
+    printf("=== Obstacle Avoidance with IMU Heading Control ===\n");
 
-    imu_init();
     motors_and_encoders_init();
-    servo_init(SERVO_PIN); // <-- Use servo_init for servo
+    servo_init(SERVO_PIN);
     setupUltrasonicPins(TRIG_PIN, ECHO_PIN);
+    imu_init();
+    
+    imu_state_t imu = {0};
+    // Initialize heading properly ONCE
+    imu_read(&imu);
+    float target_heading = imu.heading;
+    float heading_smooth = imu.heading;
 
-    PID headingPID;
-    pid_init(&headingPID, 0.5f, 0.0f, 0.02f, -0.15f, 0.15f);
-    headingPID.setpoint = 0.0f;
+    printf("IMU initialized. Starting obstacle avoidance...\n");
 
     while (true) {
+        bool imu_ok = imu_read(&imu);
+        if (imu_ok) {
+            heading_smooth = 0.85f * heading_smooth + 0.15f * imu.heading;
+        }
+
         float center_distance = get_distance_reading();
-        printf("DBG: center_distance=%.1f cm\n", center_distance);
+        printf("DBG: dist=%.1f cm, heading=%.1f°\n", center_distance, heading_smooth);
+
+        // Emergency stop (brake then brief reverse)
+        if (center_distance > 0 && center_distance <= EMERGENCY_STOP_CM) {
+            motors_stop();
+            motor_set(-REVERSE_SPEED * 0.6f, -REVERSE_SPEED * 0.6f);
+            sleep_ms(150);
+            motors_stop();
+        }
 
         if (center_distance > 0 && center_distance <= DETECTION_RANGE_CM) {
-            // Stop the car and handle obstacle
+            // Stop and scan
             motors_stop();
             sleep_ms(500);
-
             printf("\n=== OBSTACLE DETECTED at %.1f cm ===\n", center_distance);
 
-            // --- Obstacle handling (scan and bypass) ---
             encoder_release_pin_for_servo();
             servo_init(SERVO_PIN);
+            sleep_ms(100);
 
-            // --- Scan LEFT side and calculate width ---
+            // --- Scan LEFT side ---
             int left_detections = 0;
             int left_clear_count = 0;
             float left_avg_obstacle_dist = 0;
@@ -154,30 +195,20 @@ int main() {
                     left_first_pos != left_last_pos && 
                     left_first_dist > 0 && left_last_dist > 0) {
                     
-                    // Convert servo pulse to angle (adjust to match YOUR servo!)
-                    // Standard: 1000µs=-90°, 1500µs=0°, 2000µs=+90°
                     float angle1_deg = ((float)(left_first_pos - 1500) / 500.0f) * 90.0f;
                     float angle2_deg = ((float)(left_last_pos - 1500) / 500.0f) * 90.0f;
                     
-                    // Convert to radians
                     float angle1_rad = angle1_deg * M_PI / 180.0f;
                     float angle2_rad = angle2_deg * M_PI / 180.0f;
                     
-                    // Convert polar (angle, distance) to Cartesian (x, y)
-                    float x1 = left_first_dist * sinf(angle1_rad);  // sin because 0° is forward
+                    float x1 = left_first_dist * sinf(angle1_rad);
                     float y1 = left_first_dist * cosf(angle1_rad);
                     float x2 = left_last_dist * sinf(angle2_rad);
                     float y2 = left_last_dist * cosf(angle2_rad);
                     
-                    // Calculate Euclidean distance between the two points
                     left_width = sqrtf((x2 - x1) * (x2 - x1) + (y2 - y1) * (y2 - y1));
                     
-                    printf("  LEFT width calculation:\n");
-                    printf("    First edge: pos=%d, angle=%.1f°, dist=%.1f cm -> (%.1f, %.1f)\n", 
-                           left_first_pos, angle1_deg, left_first_dist, x1, y1);
-                    printf("    Last edge:  pos=%d, angle=%.1f°, dist=%.1f cm -> (%.1f, %.1f)\n", 
-                           left_last_pos, angle2_deg, left_last_dist, x2, y2);
-                    printf("    WIDTH = %.1f cm\n", left_width);
+                    printf("  LEFT width = %.1f cm\n", left_width);
                 }
                 
                 printf("  LEFT Summary: %d detections (avg dist=%.1f cm), %d clear, width=%.1f cm\n", 
@@ -186,7 +217,7 @@ int main() {
             servo_move_to_center();
             sleep_ms(500);
 
-            // --- Scan RIGHT side and calculate width ---
+            // --- Scan RIGHT side ---
             int right_detections = 0;
             int right_clear_count = 0;
             float right_avg_obstacle_dist = 0;
@@ -256,12 +287,7 @@ int main() {
                     
                     right_width = sqrtf((x2 - x1) * (x2 - x1) + (y2 - y1) * (y2 - y1));
                     
-                    printf("  RIGHT width calculation:\n");
-                    printf("    First edge: pos=%d, angle=%.1f°, dist=%.1f cm -> (%.1f, %.1f)\n", 
-                           right_first_pos, angle1_deg, right_first_dist, x1, y1);
-                    printf("    Last edge:  pos=%d, angle=%.1f°, dist=%.1f cm -> (%.1f, %.1f)\n", 
-                           right_last_pos, angle2_deg, right_last_dist, x2, y2);
-                    printf("    WIDTH = %.1f cm\n", right_width);
+                    printf("  RIGHT width = %.1f cm\n", right_width);
                 }
                 
                 printf("  RIGHT Summary: %d detections (avg dist=%.1f cm), %d clear, width=%.1f cm\n", 
@@ -341,7 +367,7 @@ int main() {
 
             printf("\n=== DECISION: Bypass to %s ===\n\n", go_left ? "LEFT" : "RIGHT");
 
-            // Execute bypass maneuver
+            // Execute bypass maneuver with your motor speeds
             printf("Step 1: Reversing...\n");
             motor_set(0.6f, 0.6f);
             sleep_ms(REVERSE_TIME_MS);
@@ -396,12 +422,30 @@ int main() {
                 }
                 wait_count++;
                 sleep_ms(100);
+                if (wait_count >= 50) { printf("Timeout - resuming\n"); break; }
             }
             printf("Path clear! Resuming normal operation.\n\n");
+
+            // Update target heading after bypass
+            if (imu_read(&imu)) {
+                target_heading = imu.heading;
+                heading_smooth = imu.heading;
+                printf("New target heading: %.1f°\n", target_heading);
+            }
         } else {
-            // Move forward at normal speed
-            motor_set(-0.6f, -0.6f);
+            // Forward with heading correction
+            float sp = approach_speed(center_distance);
+            
+            float left_speed = sp;
+            float right_speed = sp;
+
+            // Apply trim to both motors (both wheels will be equal speed)
+            motor_set(left_speed, right_speed);
+             
+            printf("  sp=%.2f L=%.2f R=%.2f\n",
+                   sp, left_speed, right_speed);
         }
-        sleep_ms(20);
+
+        sleep_ms(ULTRASONIC_CHECK_DELAY_MS);
     }
 }

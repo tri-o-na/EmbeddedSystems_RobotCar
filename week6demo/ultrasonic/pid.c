@@ -1,19 +1,23 @@
 #include "pid.h"
 
-void pid_init(PID *p, float kp, float ki, float kd, float out_min, float out_max) {
-    p->kp = kp; p->ki = ki; p->kd = kd;
-    p->setpoint = 0.0f;
-    p->integ = 0.0f; p->last = 0.0f;
-    p->out_min = out_min; p->out_max = out_max;
+void pid_init(PID *pid, float kp, float ki, float kd, float min, float max) {
+    pid->kp = kp;
+    pid->ki = ki;
+    pid->kd = kd;
+    pid->integral = 0;
+    pid->prev_error = 0;
+    pid->out_min = min;
+    pid->out_max = max;
 }
 
-float pid_update(PID *p, float measurement) {
-    float err = p->setpoint - measurement;
-    p->integ += err * 0.05f; // sample dt ~50ms used in main
-    float deriv = (err - p->last) / 0.05f;
-    p->last = err;
-    float out = p->kp * err + p->ki * p->integ + p->kd * deriv;
-    if (out < p->out_min) out = p->out_min;
-    if (out > p->out_max) out = p->out_max;
-    return out;
+float pid_update(PID *pid, float current) {
+    float error = pid->setpoint - current;
+    pid->integral += error;
+    float derivative = error - pid->prev_error;
+    pid->prev_error = error;
+
+    float output = pid->kp * error + pid->ki * pid->integral + pid->kd * derivative;
+    if (output > pid->out_max) output = pid->out_max;
+    else if (output < pid->out_min) output = pid->out_min;
+    return output;
 }

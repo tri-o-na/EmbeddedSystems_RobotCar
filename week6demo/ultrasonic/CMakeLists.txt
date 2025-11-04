@@ -13,7 +13,7 @@ add_executable(ultrasonic
     ultrasonic.c
     servo.c        # <-- Add this line for servo functions
     motor_encoder.c # <-- Add this line for wheel motor functions
-    imu_mpu6050.c
+    imu_lis3dh.c
     pid.c
 )
 
@@ -21,6 +21,9 @@ target_link_libraries(ultrasonic
     pico_stdlib
     hardware_gpio
     hardware_timer
+    hardware_i2c
+    hardware_pwm
+    hardware_adc
 )
 
 pico_enable_stdio_usb(ultrasonic 1)

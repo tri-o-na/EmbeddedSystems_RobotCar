@@ -107,11 +107,12 @@ pico_add_extra_outputs(ultrasonic_hcsr04)
 add_executable(ultrasonic
     week6demo/ultrasonic/main.c
     week6demo/ultrasonic/ultrasonic.c
-    week6demo/ultrasonic/ultrasonicObject.cpp   # <-- include if you actually use it
-    week6demo/ultrasonic/servo.c          # Servo functions (motor_init, motor_move_to_center, etc.)
+    week6demo/ultrasonic/ultrasonicObject.cpp   
+    week6demo/ultrasonic/servo.c          
     week6demo/ultrasonic/motor_encoder.c  
     week6demo/ultrasonic/imu_lis3dh.c
     week6demo/ultrasonic/pid.c
+    week6demo/ultrasonic/mqtt_pico.c      
 )
 
 target_include_directories(ultrasonic PRIVATE
@@ -125,8 +126,11 @@ target_link_libraries(ultrasonic
     pico_stdlib
     hardware_gpio
     hardware_timer
-    hardware_pwm    # ADD THIS LINE
+    hardware_pwm
     hardware_i2c
+    hardware_adc
+    pico_cyw43_arch_lwip_threadsafe_background
+    pico_lwip_mqtt
 )
 
 pico_add_extra_outputs(ultrasonic)

@@ -11,10 +11,11 @@ target_include_directories(pico_ultrasonic_object PUBLIC ${CMAKE_CURRENT_SOURCE_
 add_executable(ultrasonic 
     main.c 
     ultrasonic.c
-    servo.c        # <-- Add this line for servo functions
-    motor_encoder.c # <-- Add this line for wheel motor functions
+    servo.c        
+    motor_encoder.c 
     imu_lis3dh.c
     pid.c
+    mqtt_pico.c    # Add this
 )
 
 target_link_libraries(ultrasonic
@@ -24,6 +25,8 @@ target_link_libraries(ultrasonic
     hardware_i2c
     hardware_pwm
     hardware_adc
+    pico_cyw43_arch_lwip_threadsafe_background  # Add this
+    pico_lwip_mqtt                              # Add this
 )
 
 pico_enable_stdio_usb(ultrasonic 1)

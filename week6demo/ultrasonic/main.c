@@ -3,8 +3,18 @@
 #include "ultrasonic.h"
 #include "servo.h"
 #include "imu_lis3dh.h"
+#include "mqtt_config.h"
+#include "pico/cyw43_arch.h"     // ADD THIS LINE
 #include <stdio.h>
 #include <math.h>
+
+// MQTT function declarations - MOVE THESE TO THE TOP
+void robot_mqtt_init_and_connect(const char *broker_ip, int port);
+void robot_mqtt_process_events(void);
+void robot_mqtt_ensure_connected(void);
+bool robot_mqtt_check_connection(void);
+bool mqtt_publish_message_safe(const char *topic, const char *payload);
+void robot_set_command_handler(void (*callback)(const char *topic, const char *payload, int len));
 
 #define SERVO_PIN 15
 #define TRIG_PIN 0
@@ -93,40 +103,176 @@ static float approach_speed(float dist_cm) {
     return APPROACH_MIN_SPEED + t * (base_speed - APPROACH_MIN_SPEED);
 }
 
+static void publish_obstacle_data(float center_distance, float left_width, float right_width, 
+                                  int left_clear_count, int right_clear_count, 
+                                  bool go_left, const char* decision_reason) {
+    if (!robot_mqtt_check_connection()) {
+        return; // Skip if MQTT not connected
+    }
+    
+    char payload[512];
+    snprintf(payload, sizeof(payload),
+        "{\"distance\":%.1f,\"left_width\":%.1f,\"right_width\":%.1f,"
+        "\"left_clear\":%d,\"right_clear\":%d,\"decision\":\"%s\","
+        "\"reason\":\"%s\",\"ts\":%lu}",
+        center_distance, left_width, right_width, 
+        left_clear_count, right_clear_count,
+        go_left ? "LEFT" : "RIGHT", decision_reason,
+        (unsigned long)to_ms_since_boot(get_absolute_time()));
+    
+    mqtt_publish_message_safe("telemetry/obstacle", payload);
+    printf("[MQTT] Published obstacle data\n");
+}
+
+static void publish_scan_data(bool is_left, int detections, float avg_distance, 
+                              int clear_count, float width) {
+    if (!robot_mqtt_check_connection()) {
+        return;
+    }
+    
+    char payload[256];
+    snprintf(payload, sizeof(payload),
+        "{\"side\":\"%s\",\"detections\":%d,\"avg_dist\":%.1f,"
+        "\"clear_count\":%d,\"width\":%.1f,\"ts\":%lu}",
+        is_left ? "LEFT" : "RIGHT", detections, avg_distance,
+        clear_count, width, (unsigned long)to_ms_since_boot(get_absolute_time()));
+    
+    mqtt_publish_message_safe("telemetry/scan", payload);
+}
+
+static void publish_distance_data(float distance) {
+    if (!robot_mqtt_check_connection()) {
+        return;
+    }
+    
+    static uint32_t last_distance_publish = 0;
+    uint32_t now = to_ms_since_boot(get_absolute_time());
+    
+    // Only publish distance every 500ms to avoid flooding
+    if (now - last_distance_publish > 500) {
+        char payload[128];
+        snprintf(payload, sizeof(payload),
+            "{\"distance\":%.1f,\"ts\":%lu}",
+            distance, (unsigned long)now);
+        
+        mqtt_publish_message_safe("telemetry/distance", payload);
+        last_distance_publish = now;
+    }
+}
+
 int main() {
     stdio_init_all();
     sleep_ms(500);
-    printf("=== Obstacle Avoidance with IMU Heading Control ===\n");
+    printf("=== Obstacle Avoidance with MQTT Auto-Reconnect ===\n");
 
+    // Hardware initialization
     motors_and_encoders_init();
     servo_init(SERVO_PIN);
     setupUltrasonicPins(TRIG_PIN, ECHO_PIN);
     imu_init();
-    
-    imu_state_t imu = {0};
-    // Initialize heading properly ONCE
-    imu_read(&imu);
-    float target_heading = imu.heading;
-    float heading_smooth = imu.heading;
 
-    printf("IMU initialized. Starting obstacle avoidance...\n");
+    // WiFi and MQTT initialization
+    bool wifi_connected = false;
+    bool mqtt_connected = false;
+    uint32_t last_connection_check = 0;
+    uint32_t last_reconnect_attempt = 0;
+    const uint32_t CONNECTION_CHECK_INTERVAL = 5000;  // Check every 5 seconds
+    const uint32_t RECONNECT_DELAY = 10000;           // Wait 10 seconds between reconnect attempts
 
+    // Initial WiFi connection
+    printf("Initializing WiFi and MQTT...\n");
+    if (cyw43_arch_init()) {
+        printf("Failed to initialize WiFi\n");
+    } else {
+        cyw43_arch_enable_sta_mode();
+        if (cyw43_arch_wifi_connect_timeout_ms(WIFI_SSID, WIFI_PASS, CYW43_AUTH_WPA2_AES_PSK, 30000) == 0) {
+            printf("WiFi connected!\n");
+            wifi_connected = true;
+            robot_mqtt_init_and_connect(MQTT_BROKER_IP, MQTT_BROKER_PORT);
+            sleep_ms(2000);
+            mqtt_connected = robot_mqtt_check_connection();
+        } else {
+            printf("WiFi connection failed - will retry later\n");
+        }
+    }
+
+    // Main obstacle avoidance loop
     while (true) {
-        bool imu_ok = imu_read(&imu);
-        if (imu_ok) {
-            heading_smooth = 0.85f * heading_smooth + 0.15f * imu.heading;
+        uint32_t now = to_ms_since_boot(get_absolute_time());
+        
+        // === CONNECTION MANAGEMENT ===
+        if (now - last_connection_check > CONNECTION_CHECK_INTERVAL) {
+            last_connection_check = now;
+            
+            // Check WiFi status
+            int wifi_status = cyw43_tcpip_link_status(&cyw43_state, CYW43_ITF_STA);
+            bool wifi_is_up = (wifi_status == CYW43_LINK_UP);
+            
+            if (wifi_connected && !wifi_is_up) {
+                printf("[RECONNECT] WiFi connection lost!\n");
+                wifi_connected = false;
+                mqtt_connected = false;
+            }
+            
+            // Check MQTT status
+            if (wifi_connected && mqtt_connected) {
+                mqtt_connected = robot_mqtt_check_connection();
+                if (!mqtt_connected) {
+                    printf("[RECONNECT] MQTT connection lost!\n");
+                }
+            }
+            
+            // Attempt reconnection if needed
+            if (!wifi_connected || !mqtt_connected) {
+                if (now - last_reconnect_attempt > RECONNECT_DELAY) {
+                    last_reconnect_attempt = now;
+                    printf("[RECONNECT] Attempting to reconnect...\n");
+                    
+                    // Try WiFi reconnection
+                    if (!wifi_connected) {
+                        printf("[RECONNECT] Reconnecting WiFi...\n");
+                        if (cyw43_arch_wifi_connect_timeout_ms(WIFI_SSID, WIFI_PASS, CYW43_AUTH_WPA2_AES_PSK, 15000) == 0) {
+                            printf("[RECONNECT] WiFi reconnected!\n");
+                            wifi_connected = true;
+                        } else {
+                            printf("[RECONNECT] WiFi reconnection failed\n");
+                        }
+                    }
+                    
+                    // Try MQTT reconnection
+                    if (wifi_connected && !mqtt_connected) {
+                        printf("[RECONNECT] Reconnecting MQTT...\n");
+                        robot_mqtt_init_and_connect(MQTT_BROKER_IP, MQTT_BROKER_PORT);
+                        sleep_ms(2000);
+                        mqtt_connected = robot_mqtt_check_connection();
+                        if (mqtt_connected) {
+                            printf("[RECONNECT] MQTT reconnected!\n");
+                        } else {
+                            printf("[RECONNECT] MQTT reconnection failed\n");
+                        }
+                    }
+                }
+            }
         }
 
+        // === MQTT PROCESSING (only if connected) ===
+        if (mqtt_connected) {
+            robot_mqtt_process_events();
+        }
+
+        // === OBSTACLE AVOIDANCE LOGIC ===
         float center_distance = get_distance_reading();
-        printf("DBG: dist=%.1f cm, heading=%.1f°\n", center_distance, heading_smooth);
-
-        // Emergency stop (brake then brief reverse)
-        if (center_distance > 0 && center_distance <= EMERGENCY_STOP_CM) {
-            motors_stop();
-            motor_set(-REVERSE_SPEED * 0.6f, -REVERSE_SPEED * 0.6f);
-            sleep_ms(150);
-            motors_stop();
+        
+        // Publish distance data (only if MQTT is connected)
+        if (mqtt_connected) {
+            publish_distance_data(center_distance);
         }
+
+        // Debug output
+        printf("DBG: dist=%.1f cm, WiFi=%s, MQTT=%s\n", 
+               center_distance, 
+               wifi_connected ? "UP" : "DOWN",
+               mqtt_connected ? "UP" : "DOWN");
 
         if (center_distance > 0 && center_distance <= DETECTION_RANGE_CM) {
             // Stop and scan
@@ -427,11 +573,12 @@ int main() {
             printf("Path clear! Resuming normal operation.\n\n");
 
             // Update target heading after bypass
-            if (imu_read(&imu)) {
-                target_heading = imu.heading;
-                heading_smooth = imu.heading;
-                printf("New target heading: %.1f°\n", target_heading);
-            }
+            printf("Bypass maneuver completed.\n");
+
+            // Publish obstacle data for monitoring
+            publish_obstacle_data(center_distance, left_width, right_width, 
+                                  left_clear_count, right_clear_count, 
+                                  go_left, go_left ? "Bypass LEFT" : "Bypass RIGHT");
         } else {
             // Forward with heading correction
             float sp = approach_speed(center_distance);
@@ -448,4 +595,6 @@ int main() {
 
         sleep_ms(ULTRASONIC_CHECK_DELAY_MS);
     }
+
+    return 0;
 }

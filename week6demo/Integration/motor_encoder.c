@@ -80,20 +80,42 @@ void motors_and_encoders_init(void)
 
 void motor_set(float left, float right)
 {
-    // Clamp values to [0, 1]
-    if (left < 0)
-        left = 0;
-    if (right < 0)
-        right = 0;
-    if (left > 1)
-        left = 1;
-    if (right > 1)
-        right = 1;
+    // Clamp values to [-1, 1] for bidirectional control
+    if (left < -1.0f)
+        left = -1.0f;
+    if (left > 1.0f)
+        left = 1.0f;
+    if (right < -1.0f)
+        right = -1.0f;
+    if (right > 1.0f)
+        right = 1.0f;
 
-    // DON'T touch direction pins here - they're already set in init
-    // Just control speed via PWM duty cycle
-    pwm_set_gpio_level(ENA, (uint16_t)(left * WRAP_VALUE));
-    pwm_set_gpio_level(ENB, (uint16_t)(right * WRAP_VALUE));
+    // Handle direction based on sign
+    float left_speed = (left < 0) ? -left : left;
+    float right_speed = (right < 0) ? -right : right;
+    
+    // Set direction pins based on sign
+    // Left motor: IN1=LOW, IN2=HIGH = forward | IN1=HIGH, IN2=LOW = backward
+    if (left >= 0) {
+        gpio_put(IN1, 0);
+        gpio_put(IN2, 1);  // Forward
+    } else {
+        gpio_put(IN1, 1);
+        gpio_put(IN2, 0);  // Backward
+    }
+    
+    // Right motor: IN3=HIGH, IN4=LOW = forward | IN3=LOW, IN4=HIGH = backward
+    if (right >= 0) {
+        gpio_put(IN3, 1);
+        gpio_put(IN4, 0);  // Forward
+    } else {
+        gpio_put(IN3, 0);
+        gpio_put(IN4, 1);  // Backward
+    }
+    
+    // Control speed via PWM duty cycle (0 to 1)
+    pwm_set_gpio_level(ENA, (uint16_t)(left_speed * WRAP_VALUE));
+    pwm_set_gpio_level(ENB, (uint16_t)(right_speed * WRAP_VALUE));
 }
 
 void motors_stop(void)

@@ -14,6 +14,7 @@
 #include "mqtt_client.h"
 #include "mqtt_config.h"
 #include "pico/time.h"
+#include "motor_encoder.h"
 
 // External reference to cyw43_state (defined in cyw43_arch)
 extern cyw43_t cyw43_state;
@@ -238,22 +239,25 @@ static bool mqtt_publish_message_safe(const char *topic, const char *payload) {
 // ============================================================
 // Public API: Publish Telemetry (with backpressure control)
 // ============================================================
+// Forward declaration for getting motor speeds (defined in main.c)
+extern void get_current_motor_speeds(float *m1, float *m2);
+
 void robot_send_telemetry_data(void) {
     if (mqtt_client_instance == NULL || mqtt_client_is_connected(mqtt_client_instance) == 0) {
         return;
     }
     
-    static uint32_t telemetry_counter = 0;
     char telemetry_payload[256];
     
-    // Mock telemetry data (Phase 1)
-    uint32_t enc1 = 1000 + (telemetry_counter % 500);
-    uint32_t enc2 = 1200 + (telemetry_counter % 500);
-    float m1 = 0.5f + (telemetry_counter % 100) * 0.01f;
-    if (m1 > 1.0f) m1 = 1.0f;
-    float m2 = 0.4f + (telemetry_counter % 100) * 0.01f;
-    if (m2 > 1.0f) m2 = 1.0f;
+    // Get real encoder data
+    uint32_t enc1 = encoder_pulse_width_us(1);  // Left encoder
+    uint32_t enc2 = encoder_pulse_width_us(2);  // Right encoder
     
+    // Get current motor speeds
+    float m1 = 0.0f, m2 = 0.0f;
+    get_current_motor_speeds(&m1, &m2);
+    
+    // Format telemetry JSON
     snprintf(telemetry_payload, sizeof(telemetry_payload), 
              "{\"enc1\":%lu,\"enc2\":%lu,\"m1\":%.2f,\"m2\":%.2f,\"ts\":%lu}",
              (unsigned long)enc1, (unsigned long)enc2, m1, m2,
@@ -262,10 +266,9 @@ void robot_send_telemetry_data(void) {
     // Attempt publish with backpressure checking
     // This will return false if queue is full or too soon since last publish
     if (mqtt_publish_message_safe(MQTT_TOPIC_TELEMETRY, telemetry_payload)) {
-        telemetry_counter++;
+        // Successfully published
     } else {
         // Backpressure: skip this publish cycle
-        // Counter NOT incremented so we'll try same data next time
     }
     
     // Update publish_in_progress flag: reset if enough time has passed

@@ -175,3 +175,42 @@ pico_enable_stdio_usb(Integration 1)
 pico_enable_stdio_uart(Integration 0)
 pico_add_extra_outputs(Integration)
 
+
+# =========================
+# ---- MQTT Robot Car ----
+# =========================
+# MQTT Robot Car (Phase 2: Real hardware integration)
+add_executable(mqtt_robot
+    week6demo/mqtt_robot/src/main.c
+    week6demo/mqtt_robot/src/mqtt_pico.c
+    week6demo/Integration/motor_encoder.c
+)
+
+# Add lwIP MQTT source file manually (needed because apps are not auto-included)
+# Find Pico SDK path
+if(DEFINED ENV{HOME})
+    set(PICO_SDK_LWIP_MQTT_PATH "$ENV{HOME}/.pico-sdk/sdk/2.2.0/lib/lwip/src/apps/mqtt/mqtt.c")
+    if(EXISTS ${PICO_SDK_LWIP_MQTT_PATH})
+        target_sources(mqtt_robot PRIVATE ${PICO_SDK_LWIP_MQTT_PATH})
+    else()
+        message(WARNING "MQTT source file not found at ${PICO_SDK_LWIP_MQTT_PATH}")
+    endif()
+endif()
+
+target_include_directories(mqtt_robot PRIVATE
+    ${CMAKE_CURRENT_LIST_DIR}/week6demo/mqtt_robot/include
+    ${CMAKE_CURRENT_LIST_DIR}/week6demo/Integration
+)
+
+pico_enable_stdio_usb(mqtt_robot 1)
+pico_enable_stdio_uart(mqtt_robot 0)
+
+target_link_libraries(mqtt_robot
+    pico_stdlib
+    pico_cyw43_arch_lwip_threadsafe_background
+    hardware_pwm
+    hardware_irq
+    hardware_timer
+)
+
+pico_add_extra_outputs(mqtt_robot)

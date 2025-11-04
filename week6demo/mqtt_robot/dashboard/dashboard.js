@@ -8,9 +8,9 @@ let isConnectedToBroker = false;
 window.addEventListener('load', function() {
     console.log("Dashboard loaded");
     if (typeof mqtt !== 'undefined') {
-        console.log("✓ mqtt.js library loaded successfully");
+        console.log("mqtt.js library loaded successfully");
     } else {
-        console.error("✗ ERROR: mqtt.js library not loaded!");
+        console.error("ERROR: mqtt.js library not loaded!");
         alert("Error: MQTT library not loaded. Check internet connection.");
     }
 });
@@ -52,12 +52,12 @@ function connectMQTT() {
             updateConnectionStatus(true, "Connected");
             document.getElementById("statusText").innerText = "Connected to MQTT Broker";
             
-            // Subscribe to telemetry wildcard topic
-            brokerConnection.subscribe("telemetry/#", (err) => {
+            // Subscribe to robot telemetry topic
+            brokerConnection.subscribe("robot/telemetry", (err) => {
                 if (err) {
                     console.error("Subscription error:", err);
                 } else {
-                    console.log("✓ Subscribed to telemetry/#");
+                    console.log("✓ Subscribed to robot/telemetry");
                     showCommandStatus("Connected and subscribed!", "success");
                     setTimeout(() => {
                         document.getElementById('commandStatus').textContent = '';
@@ -96,6 +96,33 @@ function connectMQTT() {
             
             // Route message based on topic
             switch (messageTopic) {
+                // ------------------ Robot Telemetry ------------------
+                case "robot/telemetry":
+                    // Update encoder and motor values
+                    if (parsedData.enc1 !== undefined) {
+                        const enc1Element = document.getElementById("enc1");
+                        if (enc1Element) enc1Element.innerText = parsedData.enc1;
+                    }
+                    if (parsedData.enc2 !== undefined) {
+                        const enc2Element = document.getElementById("enc2");
+                        if (enc2Element) enc2Element.innerText = parsedData.enc2;
+                    }
+                    if (parsedData.m1 !== undefined) {
+                        const m1Element = document.getElementById("m1");
+                        if (m1Element) m1Element.innerText = parsedData.m1.toFixed(2);
+                    }
+                    if (parsedData.m2 !== undefined) {
+                        const m2Element = document.getElementById("m2");
+                        if (m2Element) m2Element.innerText = parsedData.m2.toFixed(2);
+                    }
+                    if (parsedData.ts !== undefined) {
+                        const tsElement = document.getElementById("timestamp");
+                        if (tsElement) tsElement.innerText = parsedData.ts;
+                    }
+                    console.log("Robot telemetry:", parsedData);
+                    updateLastUpdateTime();
+                    break;
+
                 // ------------------ Motion & IMU ------------------
                 case "telemetry/speed":
                     if (parsedData.speed !== undefined) {
@@ -205,7 +232,36 @@ function connectMQTT() {
                     break;
 
                 default:
-                    console.log("⚠️ Unhandled topic:", messageTopic);
+                    // Try to handle robot/telemetry even if topic doesn't match exactly
+                    if (messageTopic.includes("robot/telemetry") || 
+                        (messageTopic.includes("telemetry") && parsedData.enc1 !== undefined)) {
+                        console.log("Handling telemetry via default case:", messageTopic);
+                        // Update encoder and motor values
+                        if (parsedData.enc1 !== undefined) {
+                            const enc1Element = document.getElementById("enc1");
+                            if (enc1Element) enc1Element.innerText = parsedData.enc1;
+                        }
+                        if (parsedData.enc2 !== undefined) {
+                            const enc2Element = document.getElementById("enc2");
+                            if (enc2Element) enc2Element.innerText = parsedData.enc2;
+                        }
+                        if (parsedData.m1 !== undefined) {
+                            const m1Element = document.getElementById("m1");
+                            if (m1Element) m1Element.innerText = parsedData.m1.toFixed(2);
+                        }
+                        if (parsedData.m2 !== undefined) {
+                            const m2Element = document.getElementById("m2");
+                            if (m2Element) m2Element.innerText = parsedData.m2.toFixed(2);
+                        }
+                        if (parsedData.ts !== undefined) {
+                            const tsElement = document.getElementById("timestamp");
+                            if (tsElement) tsElement.innerText = parsedData.ts;
+                        }
+                        updateLastUpdateTime();
+                        console.log("Robot telemetry (fallback):", parsedData);
+                    } else {
+                        console.log("⚠️ Unhandled topic:", messageTopic);
+                    }
             }
             
             // Update last update time
@@ -309,6 +365,102 @@ function sendZero() {
     sendMotorCommand();
 }
 
+// Send directional command
+function sendDirection(direction, event) {
+    // Check connection first - same as emergency stop
+    if (!isConnectedToBroker || !brokerConnection) {
+        showCommandStatus("Not connected to MQTT broker", "error");
+        console.error("Cannot send directional command: Not connected to MQTT broker");
+        return;
+    }
+    
+    let m1 = 0.0;
+    let m2 = 0.0;
+    let directionName = "";
+    
+    // Motor calibration for straight movement
+    // Adjust these values if the car drifts left/right when going "straight"
+    // If car drifts RIGHT: increase m1 (left motor) or decrease m2 (right motor)
+    // If car drifts LEFT: decrease m1 (left motor) or increase m2 (right motor)
+    const STRAIGHT_M1 = 0.55;  // Left motor (may need boost)
+    const STRAIGHT_M2 = 0.45;  // Right motor (may need less)
+    
+    // Set motor values based on direction
+    switch(direction) {
+        case 'straight':
+            m1 = STRAIGHT_M1;
+            m2 = STRAIGHT_M2;
+            directionName = "Straight";
+            break;
+        case 'backward':
+            m1 = -STRAIGHT_M1;  // Use same calibration for backward
+            m2 = -STRAIGHT_M2;
+            directionName = "Backward";
+            break;
+        case 'clockwise':
+            m1 = 0.5;
+            m2 = -0.5;
+            directionName = "Clockwise";
+            break;
+        case 'anticlockwise':
+            m1 = -0.5;
+            m2 = 0.5;
+            directionName = "Anticlockwise";
+            break;
+        default:
+            showCommandStatus("Unknown direction", "error");
+            return;
+    }
+    
+    // Update slider displays
+    document.getElementById('motor1Slider').value = m1;
+    document.getElementById('motor2Slider').value = m2;
+    updateMotorDisplay(1, m1);
+    updateMotorDisplay(2, m2);
+    
+    // Show immediate feedback - sending command
+    showCommandStatus(`Sending ${directionName} command...`, "success");
+    
+    // Find and activate the pressed button
+    const buttons = document.querySelectorAll('.btn-direction');
+    buttons.forEach(btn => btn.classList.remove('active', 'pulsing'));
+    
+    // Get the button that was clicked
+    const clickedButton = event?.target || document.querySelector(`.btn-${direction}`);
+    if (clickedButton && clickedButton.classList.contains('btn-direction')) {
+        clickedButton.classList.add('active', 'pulsing');
+        
+        // Remove pulsing after animation
+        setTimeout(() => {
+            clickedButton.classList.remove('pulsing');
+        }, 600);
+        
+        // Remove active state after 2 seconds
+        setTimeout(() => {
+            clickedButton.classList.remove('active');
+        }, 2000);
+    }
+    
+    // Send command
+    const commandPayload = {
+        m1: m1,
+        m2: m2
+    };
+    
+    brokerConnection.publish("robot/commands", JSON.stringify(commandPayload), { qos: 0 }, (err) => {
+        if (err) {
+            console.error("Publish error:", err);
+            showCommandStatus(`Failed to send ${directionName} command`, "error");
+            // Remove active state on error
+            if (clickedButton) {
+                clickedButton.classList.remove('active', 'pulsing');
+            }
+        } else {
+            showCommandStatus(`✅ ${directionName} command sent successfully! (m1=${m1.toFixed(2)}, m2=${m2.toFixed(2)})`, "success");
+        }
+    });
+}
+
 // Show command status message
 function showCommandStatus(message, type) {
     const statusEl = document.getElementById('commandStatus');
@@ -321,6 +473,12 @@ function showCommandStatus(message, type) {
                 statusEl.textContent = '';
                 statusEl.className = 'command-status';
             }, 3000);
+        } else if (type === 'error') {
+            // Error messages persist longer (5 seconds) so user can see them
+            setTimeout(() => {
+                statusEl.textContent = '';
+                statusEl.className = 'command-status';
+            }, 5000);
         }
     }
 }

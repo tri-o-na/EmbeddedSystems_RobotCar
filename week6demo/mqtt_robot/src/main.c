@@ -1,6 +1,5 @@
-// MQTT Robot Car - Phase 1: MQTT with Mock Data
-// This version uses dummy telemetry data to test MQTT connectivity
-// Phase 2 will integrate real motor/encoder hardware
+// MQTT Robot Car - Phase 2: Real Motor/Encoder Integration
+// This version uses real encoder data and motor control
 
 #include <stdio.h>
 #include <string.h>
@@ -11,20 +10,28 @@
 #include "lwip/netif.h"
 #include "mqtt_client.h"  // Also includes WiFi credentials
 #include "mqtt_config.h"
+#include "motor_encoder.h"  // Motor and encoder functions
 
 // External reference to cyw43_state (defined in cyw43_arch)
 extern cyw43_t cyw43_state;
+
+// Track current motor speeds for telemetry
+static float current_m1 = 0.0f;
+static float current_m2 = 0.0f;
+
+// Function to get current motor speeds (for telemetry)
+void get_current_motor_speeds(float *m1, float *m2) {
+    *m1 = current_m1;
+    *m2 = current_m2;
+}
 
 // Command handler - processes incoming MQTT commands
 void process_robot_commands(const char *topic, const char *payload, int len) {
     printf("MQTT Command received on topic '%s': %.*s\n", topic, len, payload);
     
-    // Phase 1: Just print/log commands
-    // Phase 2: Parse JSON and call motor_set() with received values
-    
-    // Simple JSON parsing (basic, handles simple cases)
+    // Parse JSON and call motor_set() with received values
     if (strstr(payload, "\"m1\"") != NULL || strstr(payload, "\"m2\"") != NULL) {
-        // Extract motor values (basic parsing)
+        // Extract motor values
         float m1 = 0.0f, m2 = 0.0f;
         char *m1_pos = strstr(payload, "\"m1\"");
         char *m2_pos = strstr(payload, "\"m2\"");
@@ -42,12 +49,27 @@ void process_robot_commands(const char *topic, const char *payload, int len) {
             }
         }
         
+        // Clamp values to safe range
+        if (m1 > 1.0f) m1 = 1.0f;
+        if (m1 < -1.0f) m1 = -1.0f;
+        if (m2 > 1.0f) m2 = 1.0f;
+        if (m2 < -1.0f) m2 = -1.0f;
+        
         printf("  Parsed command: m1=%.2f, m2=%.2f\n", m1, m2);
-        printf("  [Phase 1: Command logged only - motors not controlled yet]\n");
+        
+        // Actually control the motors!
+        motor_set(m1, m2);
+        current_m1 = m1;
+        current_m2 = m2;
+        
+        printf("  Motors set: m1=%.2f, m2=%.2f\n", m1, m2);
     } else if (strstr(payload, "\"action\"") != NULL) {
         if (strstr(payload, "stop") != NULL) {
             printf("  Emergency stop command received\n");
-            printf("  [Phase 1: Stop logged only - motors not controlled yet]\n");
+            motors_stop();
+            current_m1 = 0.0f;
+            current_m2 = 0.0f;
+            printf("  Motors stopped\n");
         }
     }
 }
@@ -61,8 +83,14 @@ int main() {
     // Small delay to let USB initialize
     sleep_ms(1500);
     
-    printf("\n=== MQTT Robot Car - Phase 1 ===\n");
-    printf("Step 1: Testing LED...\n");
+    printf("\n=== MQTT Robot Car - Phase 2 ===\n");
+    printf("Step 1: Initializing motors and encoders...\n");
+    
+    // Initialize motors and encoders FIRST (before WiFi)
+    motors_and_encoders_init();
+    motors_stop();  // Start with motors stopped
+    
+    printf("Step 2: Testing LED...\n");
     
     // Test LED IMMEDIATELY - before WiFi
     if (cyw43_arch_init()) {
@@ -74,13 +102,13 @@ int main() {
         return -1;
     }
     
-    printf("Step 2: LED test - turning ON for 2 seconds...\n");
+    printf("Step 3: LED test - turning ON for 2 seconds...\n");
     cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, 1);
     sleep_ms(2000);
     cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, 0);
-    printf("Step 3: LED test complete\n");
+    printf("Step 4: LED test complete\n");
     
-    printf("Step 4: Enabling station mode...\n");
+    printf("Step 5: Enabling station mode...\n");
     cyw43_arch_enable_sta_mode();
     printf("Station mode enabled\n");
     
@@ -95,6 +123,23 @@ int main() {
     if (wifi_result) {
         printf("\n=== WiFi Connection Failed ===\n");
         printf("Error code: %d\n", wifi_result);
+        
+        // Provide helpful error messages based on error code
+        if (wifi_result == -2 || wifi_result == -3) {
+            printf("Error -2/-3: Connection timeout or authentication failed\n");
+            printf("Troubleshooting steps:\n");
+            printf("  1. Verify WiFi password is correct: '%s'\n", WIFI_PASS);
+            printf("  2. Ensure network '%s' is in range and broadcasting\n", WIFI_SSID);
+            printf("  3. Check that network supports 2.4GHz (Pico W only supports 2.4GHz)\n");
+            printf("  4. Try moving Pico W closer to router\n");
+            printf("  5. Verify router isn't blocking the device (MAC filtering)\n");
+        } else {
+            printf("Unknown error code. Common causes:\n");
+            printf("  - Wrong WiFi password\n");
+            printf("  - Network not available (5GHz only, out of range)\n");
+            printf("  - Router security settings\n");
+        }
+        
         // Flash LED to show WiFi failure
         while(1) {
             cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, 1);
@@ -119,6 +164,7 @@ int main() {
     sleep_ms(2000);
     
     printf("\n=== Main Loop Started ===\n");
+    printf("Robot is ready! Send commands via MQTT to control motors.\n");
     uint32_t last_telemetry = 0;
     uint32_t last_blink = 0;
     absolute_time_t last_connection_check = get_absolute_time();

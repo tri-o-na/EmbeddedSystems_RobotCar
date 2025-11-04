@@ -67,8 +67,30 @@
                 </div>
 
                 <div class="button-group">
-                    <button onclick="sendStop()" class="btn-stop">🛑 Emergency Stop</button>
-                    <button onclick="sendZero()" class="btn-zero">0️⃣ Set to Zero</button>
+                    <button onclick="sendStop()" class="btn-stop">Emergency Stop</button>
+                    <button onclick="sendZero()" class="btn-zero">Set to Zero</button>
+                </div>
+
+                <!-- Directional Control Buttons -->
+                <div class="directional-controls">
+                    <div class="direction-buttons">
+                        <button onclick="sendDirection('straight', event)" >
+                            <span class="direction-indicator"></span>
+                            <span class="direction-text">⬆️ Straight</span>
+                        </button>
+                        <button onclick="sendDirection('backward', event)" >
+                            <span class="direction-indicator"></span>
+                            <span class="direction-text">⬇️ Backward</span>
+                        </button>
+                        <button onclick="sendDirection('clockwise', event)" >
+                            <span class="direction-indicator"></span>
+                            <span class="direction-text">↻ Clockwise</span>
+                        </button>
+                        <button onclick="sendDirection('anticlockwise', event)">
+                            <span class="direction-indicator"></span>
+                            <span class="direction-text">↺ Anticlockwise</span>
+                        </button>
+                    </div>
                 </div>
 
                 <div class="command-status" id="commandStatus"></div>

@@ -14,6 +14,7 @@
 #include "barcode.h"
 #include "line_follow.h"
 #include "pid.h"
+#include "imu_lis3dh.h"
 
 // External reference to cyw43_state (defined in cyw43_arch)
 extern cyw43_t cyw43_state;
@@ -21,6 +22,19 @@ extern cyw43_t cyw43_state;
 // Track current motor speeds for telemetry
 static float current_m1 = 0.0f;
 static float current_m2 = 0.0f;
+
+// Speed calculation constants
+#define WHEEL_DIAMETER_MM 65.0f        // Wheel diameter in mm (adjust to your wheel size)
+#define ENCODER_TICKS_PER_REV 20.0f    // Encoder ticks per wheel revolution
+#define WHEEL_CIRCUMFERENCE_M ((WHEEL_DIAMETER_MM * 3.14159f) / 1000.0f)  // in meters
+
+// Speed tracking variables
+static uint32_t last_encoder_left = 0;
+static uint32_t last_encoder_right = 0;
+static uint64_t last_speed_calc_time = 0;
+float speed_kmh_left = 0.0f;      // Non-static so mqtt_pico.c can access
+float speed_kmh_right = 0.0f;     // Non-static so mqtt_pico.c can access
+float speed_kmh_avg = 0.0f;       // Non-static so mqtt_pico.c can access
 
 // Line following mode state
 static bool line_following_enabled = false;
@@ -31,6 +45,50 @@ static const float LINE_FOLLOW_BASE_SPEED = 0.30f;
 
 // Barcode tracking state
 static bool barcode_tracking_enabled = false;
+
+// IMU straight-line navigation mode
+static bool imu_straight_mode = false;
+static PID heading_pid;
+static const float IMU_BASE_SPEED = 0.45f;
+static float heading_setpoint = 0.0f;
+static float heading_smooth = 0.0f;
+static float distance_traveled_m = 0.0f;
+
+// Function to calculate speed in km/h from encoder readings
+void calculate_speed_kmh(void) {
+    uint64_t now = time_us_64();
+    uint32_t enc_left = encoder_get_count(1);
+    uint32_t enc_right = encoder_get_count(2);
+    
+    // Calculate speed every 200ms minimum
+    if (last_speed_calc_time == 0) {
+        last_speed_calc_time = now;
+        last_encoder_left = enc_left;
+        last_encoder_right = enc_right;
+        return;
+    }
+    
+    float time_seconds = (now - last_speed_calc_time) / 1000000.0f;
+    if (time_seconds < 0.2f) return;  // Update every 200ms
+    
+    // Calculate ticks difference
+    uint32_t delta_left = enc_left - last_encoder_left;
+    uint32_t delta_right = enc_right - last_encoder_right;
+    
+    // Calculate revolutions per second
+    float rps_left = delta_left / ENCODER_TICKS_PER_REV / time_seconds;
+    float rps_right = delta_right / ENCODER_TICKS_PER_REV / time_seconds;
+    
+    // Calculate speed: RPS × circumference (m) × 3600 (sec/hr) / 1000 (m/km)
+    speed_kmh_left = rps_left * WHEEL_CIRCUMFERENCE_M * 3.6f;
+    speed_kmh_right = rps_right * WHEEL_CIRCUMFERENCE_M * 3.6f;
+    speed_kmh_avg = (speed_kmh_left + speed_kmh_right) / 2.0f;
+    
+    // Update tracking variables
+    last_encoder_left = enc_left;
+    last_encoder_right = enc_right;
+    last_speed_calc_time = now;
+}
 
 // Function to get current motor speeds (for telemetry)
 void get_current_motor_speeds(float *m1, float *m2) {
@@ -53,13 +111,24 @@ void process_robot_commands(const char *topic, const char *payload, int len) {
     if (strstr(payload, "\"mode\"") != NULL) {
         if (strstr(payload, "\"line_follow\"") != NULL || strstr(payload, "\"line_following\"") != NULL) {
             line_following_enabled = true;
+            imu_straight_mode = false;
             printf("  Line following mode ENABLED\n");
             pid_init(&line_follow_pid, 0.08f, 0.00f, 0.002f, -0.25f, 0.25f);
             line_follow_pid.setpoint = 1.0f; // want to always see black (1.0)
             last_seen_black_time = time_us_64();
             last_turn_dir = 0;
+        } else if (strstr(payload, "\"imu_straight\"") != NULL) {
+            imu_straight_mode = true;
+            line_following_enabled = false;
+            printf("  IMU Straight-line mode ENABLED\n");
+            pid_init(&heading_pid, 0.5f, 0.0f, 0.02f, -0.15f, 0.15f);
+            heading_pid.setpoint = 0.0f;  // Target heading (will be set to current heading)
+            heading_smooth = 0.0f;
+            distance_traveled_m = 0.0f;
+            encoder_reset_counts();
         } else if (strstr(payload, "\"manual\"") != NULL) {
             line_following_enabled = false;
+            imu_straight_mode = false;
             printf("  Manual control mode ENABLED\n");
             motors_stop();
             current_m1 = 0.0f;
@@ -81,7 +150,8 @@ void process_robot_commands(const char *topic, const char *payload, int len) {
     // Emergency stop ALWAYS works, regardless of mode
     if (strstr(payload, "\"action\"") != NULL && strstr(payload, "stop") != NULL) {
         printf("  Emergency stop command received\n");
-        line_following_enabled = false;  // Disable line following on emergency stop
+        line_following_enabled = false;  // Disable all auto modes
+        imu_straight_mode = false;
         motors_stop();
         current_m1 = 0.0f;
         current_m2 = 0.0f;
@@ -89,8 +159,8 @@ void process_robot_commands(const char *topic, const char *payload, int len) {
         return;
     }
     
-    // Only process motor commands if not in line following mode
-    if (!line_following_enabled) {
+    // Only process motor commands if not in auto mode
+    if (!line_following_enabled && !imu_straight_mode) {
         // Parse JSON and call motor_set() with received values
         if (strstr(payload, "\"m1\"") != NULL || strstr(payload, "\"m2\"") != NULL) {
             // Extract motor values
@@ -154,8 +224,16 @@ int main() {
     printf("Step 1a: Initializing line following sensor...\n");
     lf_init();
     
+    // Initialize IMU sensor
+    printf("Step 1b: Initializing IMU sensor...\n");
+    if (imu_init()) {
+        printf("IMU initialized successfully\n");
+    } else {
+        printf("WARNING: IMU initialization failed\n");
+    }
+    
     // Initialize barcode sensor (GPIO already configured in barcode.c)
-    printf("Step 1b: Barcode sensor ready (GPIO %d)\n", BARCODE_IR_SENSOR_PIN);
+    printf("Step 1c: Barcode sensor ready (GPIO %d)\n", BARCODE_IR_SENSOR_PIN);
     
     printf("Step 2: Testing LED...\n");
     
@@ -285,7 +363,7 @@ int main() {
         
         // Safety check: Only stop motors if they're supposed to be at zero
         // This check runs every loop but only stops if values are actually zero
-        if (!line_following_enabled && current_m1 == 0.0f && current_m2 == 0.0f) {
+        if (!line_following_enabled && !imu_straight_mode && current_m1 == 0.0f && current_m2 == 0.0f) {
             // Only call motors_stop once to avoid excessive GPIO writes
             static bool last_was_stopped = false;
             if (!last_was_stopped) {
@@ -378,6 +456,61 @@ int main() {
             }
         }
         
+        // IMU straight-line navigation (if enabled)
+        if (imu_straight_mode) {
+            static uint64_t last_imu_update = 0;
+            uint64_t now_us = time_us_64();
+            
+            // Run control loop at 20Hz (every 50ms)
+            if ((now_us - last_imu_update) > 50000) {
+                last_imu_update = now_us;
+                
+                imu_state_t imu;
+                bool imu_ok = imu_read(&imu);
+                
+                if (imu_ok) {
+                    // Apply low-pass filtering to heading
+                    heading_smooth = 0.9f * heading_smooth + 0.1f * imu.heading;
+                    
+                    // Calculate distance from encoders
+                    uint32_t total_ticks = (encoder_get_count(1) + encoder_get_count(2)) / 2;
+                    distance_traveled_m = (total_ticks / ENCODER_TICKS_PER_REV) * WHEEL_CIRCUMFERENCE_M;
+                    
+                    // PID correction based on filtered heading
+                    float correction = pid_update(&heading_pid, heading_smooth);
+                    
+                    // Apply correction to motor speeds
+                    float left_speed = IMU_BASE_SPEED + correction;
+                    float right_speed = IMU_BASE_SPEED - correction;
+                    
+                    // Clamp speeds
+                    if (left_speed > 1.0f) left_speed = 1.0f;
+                    if (left_speed < 0.2f) left_speed = 0.2f;
+                    if (right_speed > 1.0f) right_speed = 1.0f;
+                    if (right_speed < 0.2f) right_speed = 0.2f;
+                    
+                    // Apply motor speeds (remember: motor_set uses swapped order)
+                    motor_set(right_speed, left_speed);
+                    current_m1 = right_speed;
+                    current_m2 = left_speed;
+                    
+                    // Publish IMU telemetry (raw and filtered)
+                    if (robot_mqtt_check_connection() && (now - last_telemetry > 200)) {
+                        char imu_payload[256];
+                        snprintf(imu_payload, sizeof(imu_payload),
+                                 "{\"ax\":%.3f,\"ay\":%.3f,\"az\":%.3f,\"heading_raw\":%.2f,\"heading_filtered\":%.2f,\"distance_m\":%.3f,\"correction\":%.3f,\"ts\":%lu}",
+                                 imu.ax, imu.ay, imu.az,
+                                 imu.heading, heading_smooth, distance_traveled_m, correction,
+                                 (unsigned long)now);
+                        mqtt_publish_message_safe(MQTT_TOPIC_IMU, imu_payload);
+                    }
+                } else {
+                    // IMU read failed - coast forward with last known speeds
+                    printf("IMU read failed - coasting\n");
+                }
+            }
+        }
+        
         // Barcode tracking (if enabled) - publish decoded messages
         if (barcode_tracking_enabled) {
             static int last_message_length = 0;
@@ -393,6 +526,9 @@ int main() {
                 printf("[BARCODE] Published: %s\n", decoded_message);
             }
         }
+        
+        // Calculate speed in km/h from encoders
+        calculate_speed_kmh();
         
         // Publish telemetry periodically (backpressure checking is done inside)
         if (robot_mqtt_check_connection() && (now - last_telemetry > TELEMETRY_INTERVAL_MS)) {

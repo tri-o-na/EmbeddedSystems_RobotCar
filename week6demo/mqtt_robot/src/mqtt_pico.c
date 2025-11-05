@@ -239,8 +239,11 @@ bool mqtt_publish_message_safe(const char *topic, const char *payload) {
 // ============================================================
 // Public API: Publish Telemetry (with backpressure control)
 // ============================================================
-// Forward declaration for getting motor speeds (defined in main.c)
+// Forward declaration for getting motor speeds and speed in km/h (defined in main.c)
 extern void get_current_motor_speeds(float *m1, float *m2);
+extern float speed_kmh_left;
+extern float speed_kmh_right;
+extern float speed_kmh_avg;
 
 void robot_send_telemetry_data(void) {
     if (mqtt_client_instance == NULL || mqtt_client_is_connected(mqtt_client_instance) == 0) {
@@ -257,10 +260,11 @@ void robot_send_telemetry_data(void) {
     float m1 = 0.0f, m2 = 0.0f;
     get_current_motor_speeds(&m1, &m2);
     
-    // Format telemetry JSON
+    // Format telemetry JSON with speed in km/h
     snprintf(telemetry_payload, sizeof(telemetry_payload), 
-             "{\"enc1\":%lu,\"enc2\":%lu,\"m1\":%.2f,\"m2\":%.2f,\"ts\":%lu}",
+             "{\"enc1\":%lu,\"enc2\":%lu,\"m1\":%.2f,\"m2\":%.2f,\"speed_kmh\":%.2f,\"speed_left\":%.2f,\"speed_right\":%.2f,\"ts\":%lu}",
              (unsigned long)enc1, (unsigned long)enc2, m1, m2,
+             speed_kmh_avg, speed_kmh_left, speed_kmh_right,
              (unsigned long)to_ms_since_boot(get_absolute_time()));
     
     // Attempt publish with backpressure checking

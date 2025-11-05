@@ -190,6 +190,7 @@ add_executable(mqtt_robot
     week6demo/Integration/barcode.c
     week6demo/Integration/line_follow.c
     week6demo/Integration/pid.c
+    week6demo/Integration/imu_lis3dh.c
 )
 
 # Add lwIP MQTT source file manually (needed because apps are not auto-included)
@@ -218,6 +219,7 @@ target_link_libraries(mqtt_robot
     hardware_irq
     hardware_timer
     hardware_adc
+    hardware_i2c
 )
 
 pico_add_extra_outputs(mqtt_robot)

@@ -136,6 +136,19 @@ function connectMQTT() {
                         const tsElement = document.getElementById("timestamp");
                         if (tsElement) tsElement.innerText = parsedData.ts;
                     }
+                    // Update speed data
+                    if (parsedData.speed_kmh !== undefined) {
+                        const speedElement = document.getElementById("speedKmh");
+                        if (speedElement) speedElement.innerText = parsedData.speed_kmh.toFixed(2);
+                    }
+                    if (parsedData.speed_left !== undefined) {
+                        const speedLeftElement = document.getElementById("speedLeft");
+                        if (speedLeftElement) speedLeftElement.innerText = parsedData.speed_left.toFixed(2);
+                    }
+                    if (parsedData.speed_right !== undefined) {
+                        const speedRightElement = document.getElementById("speedRight");
+                        if (speedRightElement) speedRightElement.innerText = parsedData.speed_right.toFixed(2);
+                    }
                     console.log("Robot telemetry:", parsedData);
                     updateLastUpdateTime();
                     break;
@@ -564,6 +577,27 @@ function enableLineFollowing() {
             showCommandStatus("✅ Line following mode enabled", "success");
             document.getElementById('modeStatus').textContent = "Mode: Line Following";
             document.getElementById('lineFollowBtn').classList.add('active');
+            document.getElementById('imuStraightBtn').classList.remove('active');
+            document.getElementById('manualBtn').classList.remove('active');
+        }
+    });
+}
+
+function enableIMUStraight() {
+    if (!isConnectedToBroker || !brokerConnection) {
+        showCommandStatus("Not connected to MQTT broker", "error");
+        return;
+    }
+    
+    const command = JSON.stringify({ mode: "imu_straight" });
+    brokerConnection.publish("robot/commands", command, { qos: 0 }, (err) => {
+        if (err) {
+            showCommandStatus("Failed to enable IMU straight mode", "error");
+        } else {
+            showCommandStatus("✅ IMU Straight-Line mode enabled", "success");
+            document.getElementById('modeStatus').textContent = "Mode: IMU Straight-Line";
+            document.getElementById('imuStraightBtn').classList.add('active');
+            document.getElementById('lineFollowBtn').classList.remove('active');
             document.getElementById('manualBtn').classList.remove('active');
         }
     });

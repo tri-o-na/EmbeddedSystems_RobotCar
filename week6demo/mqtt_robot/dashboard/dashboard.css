@@ -119,6 +119,13 @@ h2 {
     text-align: center;
 }
 
+.speed-display {
+    font-size: 1.3rem;
+    font-weight: bold;
+    color: #2ecc71;
+    text-shadow: 0 0 10px rgba(46, 204, 113, 0.3);
+}
+
 .control-group {
     margin-bottom: 25px;
 }

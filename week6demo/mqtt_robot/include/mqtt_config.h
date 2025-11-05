@@ -10,6 +10,7 @@
 #define MQTT_TOPIC_COMMANDS "robot/commands"
 #define MQTT_TOPIC_BARCODE "robot/barcode"
 #define MQTT_TOPIC_LINE_SENSOR "robot/line_sensor"
+#define MQTT_TOPIC_IMU "robot/imu"
 
 // Telemetry publish interval (milliseconds)
 #define TELEMETRY_INTERVAL_MS 1000

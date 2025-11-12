@@ -1,114 +1,4 @@
-// #include "pico/stdlib.h"
-// #include "imu_lis3dh.h"
-// #include "motor_encoder.h"
-// #include "pid.h"
-// #include <stdio.h>
-// #include <math.h>
-
-// int main() {
-//     stdio_init_all();
-//     sleep_ms(500);
-//     printf("=== Demo 10: LIS3DH + PID Motor Control ===\n");
-
-//     imu_init();
-//     motors_and_encoders_init();
-
-//     PID headingPID;
-//     pid_init(&headingPID, 0.5f, 0.0f, 0.02f, -0.15f, 0.15f);
-//     headingPID.setpoint = 0.0f;
-
-//     const float base_speed = 0.55f;  // more torque
-//     imu_state_t imu = {0};
-//     static float heading_smooth = 0;
-
-//     printf("Starting control loop...\n");
-
-//     while (true) {
-//         bool ok = imu_read(&imu);
-//         if (!ok) {
-//             printf("IMU read failed — using last heading\n");
-//         }
-
-//         heading_smooth = 0.9f * heading_smooth + 0.1f * imu.heading;
-
-//         float correction = pid_update(&headingPID, heading_smooth);
-//         if (fabsf(correction) < 0.05f) correction = 0;
-
-//         float left_speed = base_speed + correction;
-//         float right_speed = base_speed - correction;
-
-//         if (left_speed < 0.2f) left_speed = 0.2f;
-//         if (right_speed < 0.2f) right_speed = 0.2f;
-//         if (left_speed > 1.0f) left_speed = 1.0f;
-//         if (right_speed > 1.0f) right_speed = 1.0f;
-
-//         motor_set(left_speed, right_speed);
-
-//         printf("Heading=%.2f Corr=%.2f L=%.2f R=%.2f | EncL=%lu EncR=%lu\n",
-//                heading_smooth, correction, left_speed, right_speed,
-//                (unsigned long)encoder_pulse_width_us(1),
-//                (unsigned long)encoder_pulse_width_us(2));
-
-//         sleep_ms(50);
-//     }
-// }
-
-// #include "pico/stdlib.h"
-// #include "imu_lis3dh.h"
-// #include "motor_encoder.h"
-// #include "pid.h"
-// #include <stdio.h>
-// #include <math.h>
-
-// int main() {
-//     stdio_init_all();
-//     sleep_ms(500);
-//     printf("=== Demo 10: LIS3DH + PID Motor Control ===\n");
-
-//     imu_init();
-//     motors_and_encoders_init();
-
-//     PID headingPID;
-//     pid_init(&headingPID, 0.5f, 0.0f, 0.02f, -0.15f, 0.15f);
-//     headingPID.setpoint = 0.0f;
-
-//     const float base_speed = 0.55f;  // more torque
-//     imu_state_t imu = {0};
-//     static float heading_smooth = 0;
-
-//     printf("Starting control loop...\n");
-
-//     while (true) {
-//         bool ok = imu_read(&imu);
-//         if (!ok) {
-//             printf("IMU read failed — using last heading\n");
-//         }
-
-//         heading_smooth = 0.9f * heading_smooth + 0.1f * imu.heading;
-
-//         float correction = pid_update(&headingPID, heading_smooth);
-//         if (fabsf(correction) < 0.05f) correction = 0;
-
-//         float left_speed = base_speed + correction;
-//         float right_speed = base_speed - correction;
-
-//         if (left_speed < 0.2f) left_speed = 0.2f;
-//         if (right_speed < 0.2f) right_speed = 0.2f;
-//         if (left_speed > 1.0f) left_speed = 1.0f;
-//         if (right_speed > 1.0f) right_speed = 1.0f;
-
-//         motor_set(left_speed, right_speed);
-
-//         printf("Heading=%.2f Corr=%.2f L=%.2f R=%.2f | EncL=%lu EncR=%lu\n",
-//                heading_smooth, correction, left_speed, right_speed,
-//                (unsigned long)encoder_pulse_width_us(1),
-//                (unsigned long)encoder_pulse_width_us(2));
-
-//         sleep_ms(50);
-//     }
-// }
-
-
+// Line Following with Single IR Sensor + PID + Smart Recovery
 #include "pico/stdlib.h"
 #include "imu_lis3dh.h"
 #include "motor_encoder.h"
@@ -132,6 +22,7 @@ int main() {
 
     // PID setup
     PID pid;
+    // Kp, Ki, Kd
     pid_init(&pid, 0.08f, 0.00f, 0.002f, -0.25f, 0.25f);
     
     pid.setpoint = 1.0f; // want to always see black (1.0)
@@ -148,11 +39,16 @@ int main() {
         now = time_us_64();
 
         // Convert sensor to analog-like input for PID
-        float sensor_val = ls.left_on_line ? 1.0f : 0.0f;
-        float error = pid.setpoint - sensor_val;
+        float sensor_val = ls.left_on_line ? 1.0f : 0.0f; // sees black = 1.0, white = 0.0
+        float error = pid.setpoint - sensor_val; // desired - actual
         float correction = pid_update(&pid, error);
+         // runs the PID algorithm, which outputs a number (correction) that represents how strongly the 
+         // robot should steer to get back on the line.
+         // + -> robot should steer left (too far right)
+         // - -> robot should steer right (too far left)
+         // 0 -> On the center, go straight 
 
-        if (ls.left_on_line) {
+        if (ls.left_on_line) { // check if the sensor sees the black line
             // On black line → go straight, apply small PID bias
             left_speed  = base_speed - correction;
             right_speed = base_speed + correction;
@@ -192,23 +88,23 @@ int main() {
                 } else {
                     printf("Line lost — probing both sides...\n");
                     bool found = false;
-                    // 1) Try right
+                    
                     for (int i = 0; i < 15; i++) {
-                        motor_set(0.3f, -0.3f);
+                        motor_set(0.3f, -0.3f); // spin left
                         sleep_ms(25);
                         lf_read(&ls);
                         if (ls.left_on_line) { found = true; break; }
                     }
-                    // 2) Try left if not found
+                    
                     if (!found) {
                         for (int i = 0; i < 25; i++) {
-                            motor_set(-0.3f, 0.3f);
+                            motor_set(-0.3f, 0.3f); // spin right
                             sleep_ms(25);
                             lf_read(&ls);
                             if (ls.left_on_line) { found = true; break; }
                         }
                     }
-
+                    // once found the line, stop and resume normal operation
                     motor_set(0, 0);
                     if (found) {
                         printf("Reacquired black line!\n");

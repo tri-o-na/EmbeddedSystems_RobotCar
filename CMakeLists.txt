@@ -157,6 +157,8 @@ add_executable(Integration
     week6demo/Integration/imu_lis3dh.c
     week6demo/Integration/motor_encoder.c
     week6demo/Integration/pid.c
+    week6demo/Integration/odometry.c
+
 )
 
 target_include_directories(Integration PRIVATE

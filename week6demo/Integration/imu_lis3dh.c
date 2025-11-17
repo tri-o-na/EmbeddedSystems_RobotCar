@@ -30,7 +30,7 @@ bool imu_init(void) {
 
     uint8_t ctrl1[2] = {REG_CTRL1_A, 0x27}; // normal mode, 10Hz, XYZ enable
     uint8_t ctrl2[2] = {REG_CTRL2_A, 0x00}; // no high-pass
-    uint8_t ctrl4[2] = {REG_CTRL4_A, 0x88}; // BDU=1, HR=1, ±2g
+    uint8_t ctrl4[2] = {REG_CTRL4_A, 0x88}; // BDU=1, HR=1, Â±2g
     i2c_write_blocking(I2C_PORT, ACC_ADDR, ctrl1, 2, false);
     i2c_write_blocking(I2C_PORT, ACC_ADDR, ctrl2, 2, false);
     i2c_write_blocking(I2C_PORT, ACC_ADDR, ctrl4, 2, false);

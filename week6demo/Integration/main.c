@@ -1,133 +1,109 @@
 #include "pico/stdlib.h"
-#include "imu_lis3dh.h"
+#include <stdio.h>
+#include <stdint.h>
 #include "motor_encoder.h"
 #include "pid.h"
-#include <stdio.h>
-#include <math.h>
+#include "odometry.h"
 
-// Test function to verify motor speed control
-void test_motor_speeds(void) {
-    printf("\n=== MOTOR SPEED TEST ===\n");
+// ========================
+// Configuration
+// ========================
+#define CONTROL_LOOP_MS 50      // 50ms loop interval (20Hz control frequency)
+#define DT (float)CONTROL_LOOP_MS / 1000.0f
+
+// Target speeds in encoder ticks per second (tps)
+// M1 (Left) is faster, so we give it a LOWER setpoint to slow it down.
+// M2 (Right) is slower, so we give it a HIGHER setpoint.
+#define BASE_SPEED_TPS   20.0f   
+#define M1_SPEED_OFFSET  -0.0f   // Example: M1 target is 20 - 2 = 18.0 tps
+#define M2_SPEED_OFFSET  +0.0f   // Example: M2 target is 20 + 0 = 20.0 tps
+
+#define TARGET_SPEED_M1 (BASE_SPEED_TPS + M1_SPEED_OFFSET)
+#define TARGET_SPEED_M2 (BASE_SPEED_TPS + M2_SPEED_OFFSET)
+
+// PID Constants (Use the stabilized, low KI values)
+#define KP 0.02f
+#define KI 0.0001f  
+#define KD 0.00f
+
+
+// ========================
+// Global Variables
+// ========================
+PID left_pid;
+PID right_pid;
+Pose2D pose; 
+static uint32_t last_left_ticks = 0;
+static uint32_t last_right_ticks = 0;
+
+
+void setup() {
+    stdio_init_all();
     
-    printf("Testing LEFT motor at different speeds:\n");
-    for (float speed = 0.2f; speed <= 1.0f; speed += 0.2f) {
-        printf("Setting left=%.1f, right=0.0 - Watch if motor speed changes!\n", speed);
-        motor_set(speed, 0.0f);
-        sleep_ms(2000);  // Run for 2 seconds
-    }
+    // Initialize hardware
+    motors_and_encoders_init();
+    odom_init(&pose);
     
-    motors_stop();
-    sleep_ms(1000);
+    // 1. Initialize Left Motor PID (M1)
+    pid_init(&left_pid, KP, KI, KD, -1.0f, 1.0f);
+    left_pid.setpoint = TARGET_SPEED_M1; // M1 setpoint
+
+    // 2. Initialize Right Motor PID (M2)
+    pid_init(&right_pid, KP, KI, KD, -1.0f, 1.0f);
+    right_pid.setpoint = TARGET_SPEED_M2; // M2 setpoint
     
-    printf("Testing RIGHT motor at different speeds:\n");
-    for (float speed = 0.2f; speed <= 1.0f; speed += 0.2f) {
-        printf("Setting left=0.0, right=%.1f - Watch if motor speed changes!\n", speed);
-        motor_set(0.0f, speed);
-        sleep_ms(2000);
-    }
-    
-    motors_stop();
-    printf("=== TEST COMPLETE ===\n\n");
+    // Get initial encoder counts to properly start tracking changes
+    encoder_get_counts(&last_left_ticks, &last_right_ticks);
+    printf("Setup complete. Driving straight with M1=%.1f tps and M2=%.1f tps.\n", 
+           TARGET_SPEED_M1, TARGET_SPEED_M2);
 }
 
-int main() {
-    stdio_init_all();
-    sleep_ms(500);
-    printf("=== Demo 1: Basic Motion & Sensing Integration ===\n");
 
-    // --- Initialize sensors and motors ---
-    imu_init();
-    motors_and_encoders_init();
-
-    // UNCOMMENT THIS LINE TO TEST MOTOR SPEED CONTROL
-    //test_motor_speeds();
-    //return 0;  // Stop here after test
-
-    // --- PID controller for drift correction ---
-    PID driftPID;
-    // Stronger gains to actively reduce drift
-    pid_init(&driftPID, 0.008f, 0.00003f, 0.001f, -0.25f, 0.25f);
-    driftPID.setpoint = 0.0f;
-
-    // --- Base speeds with mechanical bias ---
-    const float BASE_LEFT = 0.20f;   // Left motor needs boost
-    const float BASE_RIGHT = 0.12f;  // Right motor is naturally faster
+void loop() {
+    uint32_t current_left_ticks, current_right_ticks;
     
-    // --- Tracking variables ---
-    static uint32_t left_total = 0;
-    static uint32_t right_total = 0;
-    uint32_t last_left_ticks = 0;
-    uint32_t last_right_ticks = 0;
+    // --- 1. Read Encoders and Calculate Speed ---
+    encoder_get_counts(&current_left_ticks, &current_right_ticks);
 
-    float distance_traveled = 0.0f;
-    const float TICKS_PER_CM = 10.0f;
+    // Calculate change in ticks since last loop
+    int32_t dleft_ticks  = (int32_t)(current_left_ticks - last_left_ticks);
+    int32_t dright_ticks = (int32_t)(current_right_ticks - last_right_ticks);
 
-    imu_state_t imu = {0};
+    last_left_ticks = current_left_ticks;
+    last_right_ticks = current_right_ticks;
 
-    printf("Starting control loop...\n");
-    printf("Adjusted for left motor mechanical difference\n\n");
+    // Calculate instantaneous speed (ticks/second)
+    float left_speed_tps  = (float)dleft_ticks / DT;
+    float right_speed_tps = (float)dright_ticks / DT;
+    
+    
+    // --- 2. Update PID Controllers ---
+    float left_output  = pid_update(&left_pid, left_speed_tps);
+    float right_output = pid_update(&right_pid, right_speed_tps);
 
-    while (true) {
-        // --- Read IMU ---
-        if (!imu_read(&imu)) {
-            printf("IMU read failed!\n");
-            continue;
-        }
 
-        // --- Read encoders ---
-        uint32_t left_ticks = encoder_get_count(1);
-        uint32_t right_ticks = encoder_get_count(2);
+    // --- 3. Set Motor Power ---
+    motor_set(left_output, right_output);
+    
+    
+    // --- 4. Odometry Update (Optional) ---
+    odom_update(&pose, dleft_ticks, dright_ticks);
 
-        uint32_t left_delta = left_ticks - last_left_ticks;
-        uint32_t right_delta = right_ticks - last_right_ticks;
-        
-        left_total += left_delta;
-        right_total += right_delta;
-        
-        distance_traveled = ((left_total + right_total) / 2.0f) / TICKS_PER_CM;
-        
-        last_left_ticks = left_ticks;
-        last_right_ticks = right_ticks;
 
-        // --- Calculate drift error ---
-        float drift_error = (float)((int32_t)right_total - (int32_t)left_total);
+    // Debugging print (optional)
+    printf("L(M1): SP=%.1f, Meas=%.1f, Out=%.2f | R(M2): SP=%.1f, Meas=%.1f, Out=%.2f\n", 
+           left_pid.setpoint, left_speed_tps, left_output,
+           right_pid.setpoint, right_speed_tps, right_output);
 
-        // --- PID correction ---
-        float correction = pid_update(&driftPID, drift_error);
-        
-        if (fabsf(correction) < 0.005f) correction = 0;
+    // Sleep for the remainder of the loop time
+    sleep_ms(CONTROL_LOOP_MS);
+}
 
-        // --- Apply correction with bias ---
-        float left_speed  = BASE_LEFT + correction;
-        float right_speed = BASE_RIGHT - correction;
 
-        // --- Clamp to [0, 1] ---
-        if (left_speed > 1.0f) left_speed = 1.0f;
-        if (left_speed < 0.0f) left_speed = 0.0f;
-        if (right_speed > 1.0f) right_speed = 1.0f;
-        if (right_speed < 0.0f) right_speed = 0.0f;
-
-        // --- Apply to motors ---
-        motor_set(left_speed, right_speed);
-
-        // --- Telemetry ---
-        printf("=== TELEMETRY ===\n");
-        printf("Speed: L=%.3f R=%.3f | ", left_speed, right_speed);
-        printf("Distance: %.1f cm | ", distance_traveled);
-        printf("Heading: %.2f°\n", imu.heading);
-        
-        printf("IMU (filtered): ax=%.3f ay=%.3f az=%.3f\n", 
-               imu.ax, imu.ay, imu.az);
-        
-        printf("Encoders: L=%lu R=%lu (delta: L=%lu R=%lu)\n",
-               (unsigned long)left_total, (unsigned long)right_total,
-               (unsigned long)left_delta, (unsigned long)right_delta);
-        
-        printf("PID: Drift=%ld Correction=%.4f\n",
-               (long)drift_error, correction);
-        
-        printf("\n");
-
-        sleep_ms(50);
+int main() {
+    setup();
+    while (1) {
+        loop();
     }
+    return 0;
 }

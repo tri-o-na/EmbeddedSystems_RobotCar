@@ -217,3 +217,83 @@ void barcodeTask(void *pvParameters)
 
     track_bars(); // start scanning and decoding
 }
+
+// ===== NON-BLOCKING BARCODE SCANNER =====
+// This version behaves like your full scanner, but never blocks the loop.
+
+static BarInfo bars[BARS_PER_CHAR];
+static int bar_count = 0;
+static int char_count = 0;
+
+static int last_state = -1;
+static absolute_time_t bar_start;
+static bool started = false;
+
+void barcode_init_nonblocking(void)
+{
+    gpio_init(BARCODE_IR_SENSOR_PIN);
+    gpio_set_dir(BARCODE_IR_SENSOR_PIN, GPIO_IN);
+
+    reset_message();
+    bar_count = 0;
+    char_count = 0;
+    started = false;
+
+    printf("Barcode: non-blocking reader ready\n");
+}
+
+
+void barcode_update(void)
+{
+    int new_state = get_denoised_state();  // your adaptive filter
+
+    if (last_state == -1)
+    {
+        last_state = new_state;
+        bar_start = get_absolute_time();
+        return;
+    }
+
+    // Wait until first BLACK to begin
+    if (!started)
+    {
+        if (new_state == 0) {
+            started = true;
+            bar_start = get_absolute_time();
+            last_state = new_state;
+            printf("Barcode: first black detected\n");
+        }
+        return;
+    }
+
+    // Detect state change (white<->black)
+    if (new_state != last_state)
+    {
+        absolute_time_t now = get_absolute_time();
+        float width_ms = absolute_time_diff_us(bar_start, now) / 1000.0f;
+
+        // Ignore noise
+        if (width_ms >= 0.25f)
+        {
+            bars[bar_count].width = width_ms;
+            bars[bar_count].state = last_state;
+
+            printf("Char %d - Bar %d: %s (%.2f ms)\n",
+                   char_count, bar_count,
+                   last_state ? "WHITE" : "BLACK",
+                   width_ms);
+
+            bar_count++;
+
+            if (bar_count == BARS_PER_CHAR)
+            {
+                process_bars(bars, char_count);
+                bar_count = 0;
+                char_count++;
+            }
+        }
+
+        bar_start = now;
+        last_state = new_state;
+    }
+}

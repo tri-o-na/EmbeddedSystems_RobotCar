@@ -31,5 +31,9 @@ void add_to_message(char decoded_char);
 void reset_message(void);
 void track_bars(void);
 void barcodeTask(void *pvParameters);
+void barcode_update(void);
+void barcode_init_nonblocking(void);
+
+
 
 #endif

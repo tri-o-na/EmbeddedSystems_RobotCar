@@ -109,126 +109,204 @@
 // }
 
 
+#include <stdio.h>
 #include "pico/stdlib.h"
-#include "imu_lis3dh.h"
+
+#include "line_follow.h"
 #include "motor_encoder.h"
 #include "pid.h"
-#include <stdio.h>
+#include "barcode.h"
 #include <math.h>
-#include <line_follow.h>
-#include <barcode.h>
 
-int main() {
-    stdio_init_all();
-    sleep_ms(500);
-    printf("=== Demo 2: Single IR + PID + Smart Recovery (Left Turn Fix) ===\n");
+// ====== PID ======
+PID pid;
 
-    imu_init();
-    motors_and_encoders_init();
-    lf_init();
+// ---- TUNE THESE IF NEEDED ----
+// Based on your comment: white ~200, black ~4000
+#define HYST_LOW   800      // must be BELOW this = white
+#define HYST_HIGH  1400     // must be ABOVE this = black
 
-    const float base_speed = 0.30f;
-    float left_speed = 0.0f, right_speed = 0.0f;
+#define ADC_WHITE_EST   150.0f
+#define ADC_BLACK_EST  3500.0f
 
-    // PID setup
-    PID pid;
-    pid_init(&pid, 0.08f, 0.00f, 0.002f, -0.25f, 0.25f);
-    
-    pid.setpoint = 1.0f; // want to always see black (1.0)
+// ========= SPEEDS =========
+#define BASE_SPEED      0.35f
+#define BOOST_SPEED     0.28f
+#define TURN_GAIN       0.50f
 
-    uint64_t last_seen_black_time = 0;
-    int last_turn_dir = 0; // -1 = left, +1 = right, 0 = straight
-    uint64_t now;
+#define REVERSE_SPEED  -0.20f
+#define TURN_CORRECT   0.30f
 
-    printf("Starting control loop...\n");
 
-    while (true) {
-        line_sample_t ls;
-        lf_read(&ls);
-        now = time_us_64();
+#define FWD_SPEED   0.30f
+#define REV_SPEED  -0.25f
 
-        // Convert sensor to analog-like input for PID
-        float sensor_val = ls.left_on_line ? 1.0f : 0.0f;
-        float error = pid.setpoint - sensor_val;
-        float correction = pid_update(&pid, error);
+float HYSTERESIS_LOW  = 800;   // if lower → definitely white
+float HYSTERESIS_HIGH = 1400;  // if higher → definitely black
 
-        if (ls.left_on_line) {
-            // On black line → go straight, apply small PID bias
-            left_speed  = base_speed - correction;
-            right_speed = base_speed + correction;
-            last_seen_black_time = now;
+// ******** MISSING FUNCTION FIX ********
+// add clampf to your main.c
+static float clampf(float v, float lo, float hi)
+{
+    if (v < lo) return lo;
+    if (v > hi) return hi;
+    return v;
+}
 
-            // Stabilize last turn direction (±0.01 threshold to avoid noise)
-            if (correction > 0.01f)
-                last_turn_dir = +1;   // drifting right → needs left correction
-            else if (correction < -0.01f)
-                last_turn_dir = -1;   // drifting left → needs right correction
-        } 
-        else {
-            // --- Off the line ---
-            uint64_t lost_duration = now - last_seen_black_time;
+// void follow_line(void)
+// {
+//     line_sample_t s;
+//     lf_read(&s);
 
-            if (lost_duration < 300000) {
-                // Short-term drift → steer gently using last known direction
-                if (last_turn_dir == -1) {
-                    // stronger left bias
-                    left_speed  = base_speed * 0.25f;
-                    right_speed = base_speed * 1.1f;
-                } else {
-                    left_speed  = base_speed * 1.0f;
-                    right_speed = base_speed * 0.5f;
-                }
-            } 
-            else {
-                // Lost line
-                uint64_t lost_duration = now - last_seen_black_time;
+//     float raw_adc = (float)s.adc_left;
 
-                if (lost_duration < 300000) {
-                    // short loss — keep bias
-                    if (last_turn_dir == -1)
-                        motor_set(0.2f, 0.45f); // turn left
-                    else
-                        motor_set(0.45f, 0.2f); // turn right
-                } else {
-                    printf("Line lost — probing both sides...\n");
-                    bool found = false;
-                    // 1) Try right
-                    for (int i = 0; i < 15; i++) {
-                        motor_set(0.3f, -0.3f);
-                        sleep_ms(25);
-                        lf_read(&ls);
-                        if (ls.left_on_line) { found = true; break; }
-                    }
-                    // 2) Try left if not found
-                    if (!found) {
-                        for (int i = 0; i < 25; i++) {
-                            motor_set(-0.3f, 0.3f);
-                            sleep_ms(25);
-                            lf_read(&ls);
-                            if (ls.left_on_line) { found = true; break; }
-                        }
-                    }
+//     // ----- Smooth the ADC value -----
+//     static float adc_filtered = 0.0f;
+//     adc_filtered = (adc_filtered * 0.85f) + (raw_adc * 0.15f);
+//     float adc = adc_filtered;
 
-                    motor_set(0, 0);
-                    if (found) {
-                        printf("Reacquired black line!\n");
-                    } else {
-                        printf("Still lost — reversing briefly...\n");
-                        motor_set(-0.25f, -0.25f);
-                        sleep_ms(200);
-                    }
-                }
-            }
+//     // Normalize ADC to 0..1 range
+//     float norm = (adc - ADC_WHITE_EST) / (ADC_BLACK_EST - ADC_WHITE_EST);
+//     norm = clampf(norm, 0.0f, 1.0f);
 
+//     // Speed boost on black
+//     float speed = (norm > 0.7f) ? BOOST_SPEED : BASE_SPEED;
+
+//     // Steering
+//     float error = norm - 0.5f;
+//     float turn  = 0.35f * error;
+
+//     float left  = speed + turn;
+//     float right = speed - turn;
+
+//     // ------- FIX A: Minimum drive to stop LEFT stall -------
+//     float MIN_DRIVE = 0.18f;
+
+//     if (left > 0 && left < MIN_DRIVE) left = MIN_DRIVE;
+//     if (right > 0 && right < MIN_DRIVE) right = MIN_DRIVE;
+
+//     if (left < 0 && left > -MIN_DRIVE) left = -MIN_DRIVE;
+//     if (right < 0 && right > -MIN_DRIVE) right = -MIN_DRIVE;
+//     // --------------------------------------------------------
+
+//     // ------- FIX B: Slight boost for left-turn control -------
+//     // If turning left (error is negative), give right motor 5% boost
+//     if (error < -0.05f) {
+//         right *= 1.05f;
+//     }
+//     // ----------------------------------------------------------
+
+//     left  = clampf(left,  -1.0f, 1.0f);
+//     right = clampf(right, -1.0f, 1.0f);
+
+//     motor_set(left, right);
+// }
+
+void follow_line(void)
+{
+    line_sample_t s;
+    lf_read(&s);
+
+    float adc = (float)s.adc_left;
+
+    // Smooth
+    static float filtered = 0;
+    filtered = filtered * 0.80f + adc * 0.20f;
+
+    bool on_black = (filtered > 1100);
+    bool on_white = !on_black;
+
+    //-----------------------------------------
+    // LOST LINE DETECTION
+    //-----------------------------------------
+    static int white_count = 0;
+    static bool reversing = false;
+    static absolute_time_t reverse_end;
+
+    if (on_white)
+        white_count++;
+    else
+        white_count = 0;
+
+    //-----------------------------------------
+    // Reverse ONLY when extremely lost
+    //-----------------------------------------
+    if (!reversing && white_count > 80)      // ~400ms lost
+    {
+        reversing = true;
+        reverse_end = make_timeout_time_ms(350);
+    }
+
+    //-----------------------------------------
+    // REVERSE MODE
+    //-----------------------------------------
+    if (reversing)
+    {
+        if (time_reached(reverse_end))
+            reversing = false;
+        else
+        {
+            motor_set(-0.22f, -0.22f);       // smooth reverse
+            return;
         }
+    }
 
-        // Apply computed motor speeds
-        motor_set(right_speed, left_speed);
+    //-----------------------------------------
+    // NORMAL LINE FOLLOWING
+    //-----------------------------------------
 
-        printf("ADC=%4u | onLine=%d | err=%.2f | corr=%.3f | L=%.2f R=%.2f | dir=%d\n",
-               ls.adc_left, ls.left_on_line, error, correction,
-               left_speed, right_speed, last_turn_dir);
+    float FWD  = 0.28f;   // your forward speed
+    float TURN = 0.30f;   // strong turning force
 
-        sleep_ms(60);
+    float left, right;
+
+    if (on_black)
+    {
+        // BLACK = turn RIGHT
+        left  = FWD - TURN;
+        right = FWD + TURN;
+    }
+    else
+    {
+        // WHITE = turn LEFT
+        left  = FWD + TURN;
+        right = FWD - TURN;
+    }
+
+    //-----------------------------------------
+    // MINIMUM DRIVE FIX — prevents stalling
+    //-----------------------------------------
+    const float MIN = 0.17f;  // motor dead-zone
+
+    if (left > 0 && left < MIN) left = MIN;
+    if (right > 0 && right < MIN) right = MIN;
+
+    motor_set(left, right);
+}
+
+
+
+
+
+
+
+
+
+int main()
+{
+    stdio_init_all();
+    lf_init();
+    motors_and_encoders_init();
+    barcode_init_nonblocking();
+
+    
+
+    while (1)
+    {
+        barcode_update();  // non-blocking barcode scanner  
+        follow_line();     // smooth line following
+        sleep_ms(5);
+
+
     }
 }

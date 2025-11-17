@@ -13,3 +13,5 @@ Makefile
 .vscode/
 
 *.uf2
+
+.cache/

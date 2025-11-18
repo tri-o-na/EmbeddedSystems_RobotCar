@@ -16,7 +16,8 @@ typedef struct {
 } barcode_scan_t;
 
 void barcode_init(void);
-void barcode_scan(barcode_scan_t *scan);
+void barcode_scan(barcode_scan_t *scan); // BLOCKING - AVOID USE IN MAIN LOOP
 void barcode_decode_full(barcode_scan_t *scan);
+void barcode_nonblocking_update(void); // NON-BLOCKING - USE IN MAIN LOOP
 
 #endif

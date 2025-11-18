@@ -58,6 +58,89 @@ static void wait_for_first_black() {
 }
 
 // ------------------------------------------------------
+// Non-blocking state machine variables
+// ------------------------------------------------------
+static barcode_scan_t current_scan;
+static int prev_val = -1;
+static absolute_time_t last_edge_time;
+static absolute_time_t last_scan_start;
+static bool scanning_active = false;
+
+// ------------------------------------------------------
+// Non-Blocking Update Function
+// ------------------------------------------------------
+void barcode_nonblocking_update(void) {
+    
+    // Check for a long timeout to end the scan
+    if (scanning_active && absolute_time_diff_us(last_edge_time, get_absolute_time()) > TIMEOUT_US) {
+        scanning_active = false;
+        printf("Scan ended by timeout. Captured %d bars.\n", current_scan.count);
+        
+        // Only decode if we captured enough data
+        if (current_scan.count >= 9) {
+            barcode_decode_full(&current_scan);
+        }
+        return;
+    }
+
+    int v = gpio_get(BARCODE_PIN);
+
+    // State initialization: Wait for the first transition (black bar start)
+    if (!scanning_active) {
+        if (v == 1) { // Wait for BLACK (high)
+            current_scan.count = 0;
+            scanning_active = true;
+            prev_val = 1;
+            last_edge_time = get_absolute_time();
+            last_scan_start = last_edge_time;
+            printf("Starting non-blocking scan (Left Sensor)...\n");
+        }
+        return; // Wait for BLACK
+    }
+    
+    // Edge detection logic
+    if (v != prev_val) {
+        
+        // Debouncing/Stability check
+        int stable = 0;
+        for (int i = 0; i < STABLE_READS; i++) {
+            sleep_us(80);
+            if (gpio_get(BARCODE_PIN) == v) stable++;
+        }
+        if (stable < STABLE_READS) return; // Not stable, ignore edge
+        
+        // Edge is confirmed
+        absolute_time_t now = get_absolute_time();
+        uint32_t dur = absolute_time_diff_us(last_scan_start, now);
+        
+        // Record bar if duration is valid
+        if (dur >= MIN_BAR_US && dur <= MAX_BAR_US && current_scan.count < MAX_BARS) {
+            current_scan.duration_us[current_scan.count] = dur;
+            current_scan.color[current_scan.count] = prev_val;
+            current_scan.count++;
+
+            // printf("[%02d] %s %u us\n",
+            //        current_scan.count,
+            //        prev_val ? "Black" : "White",
+            //        dur);
+        } else if (dur > MAX_BAR_US) {
+             // Treat as end of scan if bar is too long
+             scanning_active = false;
+             printf("Scan ended by too long bar. Captured %d bars.\n", current_scan.count);
+             if (current_scan.count >= 9) {
+                 barcode_decode_full(&current_scan);
+             }
+             return;
+        }
+
+        // Update state for next transition
+        prev_val = v;
+        last_scan_start = now;
+        last_edge_time = now;
+    }
+}
+
+// ------------------------------------------------------
 // Scan bars
 // ------------------------------------------------------
 void barcode_scan(barcode_scan_t *scan) {
@@ -149,7 +232,7 @@ void barcode_decode_full(barcode_scan_t *scan) {
         return;
     }
 
-    printf("\n=== DECODING MULTI-CHAR (SLIDING WINDOW) ===\n");
+    printf("\n=== DECODING MULTI-CHAR (RIGID 10-BAR STEP) ===\n"); // MODIFIED title
 
     char output[64];
     int out_i = 0;
@@ -157,7 +240,7 @@ void barcode_decode_full(barcode_scan_t *scan) {
     int s = 0;
     while (s + 9 <= scan->count) {
 
-        // 9 bars window
+        // 9 bars window (0-8, 10-18, etc.)
         uint32_t win[9];
         for (int i = 0; i < 9; i++)
             win[i] = scan->duration_us[s + i];
@@ -173,16 +256,17 @@ void barcode_decode_full(barcode_scan_t *scan) {
             // valid character found
             output[out_i++] = ch;
 
-            // Try to jump ahead ~10 bars (but clamp)
-            s += 10;
+            // Enforce rigid skip: 9 data bars + 1 ICG = 10 bars
+            s += 10; 
         } else {
-            // invalid → slide by 1 bar
-            s += 1;
+            // invalid → Still skip 10 bars to enforce synchronization 
+            // (9 data bars + 1 separator bar)
+            s += 10; // <-- MODIFIED: Removed sliding window (s+=1)
         }
     }
 
     if (out_i == 0) {
-        printf("No valid characters\n");
+        printf("No valid characters decoded using rigid structure.\n"); // MODIFIED message
         return;
     }
 

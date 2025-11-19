@@ -17,27 +17,27 @@ static float clampf(float v, float lo, float hi)
 }
 
 // ---- Motor Calibration Bias ----
-// Bias maintained at 0.05f to match the slow base speed.
-#define CALIBRATION_BIAS 0.05f 
+// Increased aggressively to 0.20f to ensure the Left wheel powers straight.
+#define CALIBRATION_BIAS 0.20f 
 
 int main() {
     stdio_init_all();
     sleep_ms(500);
-    printf("=== Combined: Final PID Follow + Barcode Scan (Slowed) + Rebalanced Bias ===\n");
+    printf("=== Combined: Final PID Follow + Barcode Scan (Slowed) + Extreme Calibration ===\n");
 
     // imu_init(); // IMU removed
     motors_and_encoders_init();
     lf_init();      // Initializes Right Sensor (GPIO26)
     barcode_init(); // Initializes Left Sensor (GPIO2)
 
-    // 🔥 MODIFIED: Base speed increased to 0.18f (was 0.15f) for reliable motor starting.
-    const float base_speed = 0.18f; 
+    // Base speed set to 0.20f for reliable barcode detection
+    const float base_speed = 0.20f; 
     float left_speed = 0.0f, right_speed = 0.0f;
 
     // --- Line Following PID setup ---
     PID linePID;
-    // PID tuning remains the same: Kp=0.05f, Kd=0.003f, Limits=±0.15f
-    pid_init(&linePID, 0.05f, 0.00f, 0.003f, -0.15f, 0.15f);
+    // Kp reduced to 0.035f for less aggressive steering. Kd increased to 0.003f to help dampen overshooting. Limits set to +/-0.25f.
+    pid_init(&linePID, 0.035f, 0.00f, 0.003f, -0.25f, 0.25f);
     linePID.setpoint = 1.0f; // want to always see black (1.0)
     
     uint64_t last_seen_black_time = 0;
@@ -57,12 +57,12 @@ int main() {
         float sensor_val = ls.right_on_line ? 1.0f : 0.0f; 
         float correction = pid_update(&linePID, linePID.setpoint - sensor_val);
         
-        // 🔥 MODIFIED: min_drive increased to 0.15f (was 0.10f) to ensure motors start reliably.
-        float min_drive = 0.15f; 
+        float min_drive = 0.20f; 
 
         if (ls.right_on_line) { // check if the RIGHT sensor sees the black line
             
             // FIX: Apply Deadband to correction when on the line (error=0.0f)
+            // This prevents random turns caused by noisy D-term output.
             if (fabsf(correction) < 0.02f) { 
                 correction = 0.0f;
             }
@@ -89,15 +89,14 @@ int main() {
 
             if (lost_duration < 300000) {
                 // Short-term drift
-                // 🔥 MODIFIED: Adjusted recovery multipliers for new base_speed (0.18f)
                 if (last_turn_dir == -1) {
                     // Turn LEFT (stronger right bias + calibration)
-                    left_speed  = base_speed * 0.5f + CALIBRATION_BIAS; // L_slow
-                    right_speed = base_speed * 1.5f; // R_fast
+                    left_speed  = base_speed * 0.25f + CALIBRATION_BIAS;
+                    right_speed = base_speed * 1.0f; 
                 } else {
                     // Turn RIGHT (stronger left bias + calibration)
-                    left_speed  = base_speed * 1.5f + CALIBRATION_BIAS; // L_fast
-                    right_speed = base_speed * 0.5f; // R_slow
+                    left_speed  = base_speed * 1.1f + CALIBRATION_BIAS;
+                    right_speed = base_speed * 0.25f;
                 }
             } 
             else {
@@ -108,7 +107,7 @@ int main() {
                 
                 // Spin LEFT search (R fwd, L bwd)
                 for (int i = 0; i < 15; i++) {
-                    motor_set(0.20f, -0.20f); 
+                    motor_set(0.25f, -0.25f); 
                     sleep_ms(25);
                     lf_read(&ls);
                     if (ls.right_on_line) { found = true; break; }
@@ -117,7 +116,7 @@ int main() {
                 if (!found) {
                     // Spin RIGHT search (R bwd, L fwd)
                     for (int i = 0; i < 25; i++) {
-                        motor_set(-0.20f, 0.20f); 
+                        motor_set(-0.25f, 0.25f); 
                         sleep_ms(25);
                         lf_read(&ls);
                         if (ls.right_on_line) { found = true; break; }
@@ -131,7 +130,7 @@ int main() {
                 } else {
                     printf("Still lost — reversing briefly...\n");
                     // Reverse (R bwd, L bwd)
-                    motor_set(-0.18f, -0.18f); // Use base_speed for gentle reverse
+                    motor_set(-0.20f, -0.20f); 
                     sleep_ms(150);
                 }
                 

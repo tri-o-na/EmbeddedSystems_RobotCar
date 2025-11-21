@@ -1,139 +1,116 @@
 #include <stdio.h>
 #include "pico/stdlib.h"
 #include "hardware/adc.h"
-#include "pico/time.h"
 #include "hardware/gpio.h"
 
-// ================== Pin map ==================
-// Sensor A
-#define A_ADC_INPUT  0      // ADC0 -> GP26
-#define A_PIN_DO     27     // DO on GP27
+// --- 1. CONFIGURATION ---
+#define ADC_PIN_A 26 // GPIO26 for ADC0 (Sensor A)
+#define ADC_PIN_B 27 // GPIO27 for ADC1 (Sensor B)
+#define IR_EMITTER_PIN 15 // Example GPIO pin for controlling IR LED (optional)
+#define BAUD_RATE 115200
 
-// Sensor B
-#define B_PIN_DO     3      // DO on GP3
-#define B_USE_ADC    1      // we ARE using analog on B
-#define B_ADC_INPUT  2      // ADC2 -> GP28
+// ADC Thresholds (These should be tuned for your specific environment)
+// Based on your log: Black (4000+) vs. White (100-200). 
+// Threshold is set where readings *below* it mean "ON WHITE LINE".
+#define THRESHOLD_A 500  
+#define THRESHOLD_B 50 
 
-// Print period (ms)
-#define LOOP_MS      50
+// --- 2. GLOBAL VARIABLES ---
+// Variables to hold the current time when the sensor was active/inactive
+uint64_t last_active_micros_A = 0;
+uint64_t last_active_micros_B = 0;
 
-// ============== Globals for LOW pulse width (active-low) ==============
-// Measure LOW-time: timestamp FALL, compute on RISE
-static volatile uint32_t a_last_fall_us = 0, b_last_fall_us = 0;
-static volatile uint32_t a_low_pw_us = 0,   b_low_pw_us = 0;
 
-// ============== IRQ handler for both DO lines (active-low) ==============
-static void do_irq(uint gpio, uint32_t events) {
-    uint32_t now = to_us_since_boot(get_absolute_time());
-
-    if (gpio == A_PIN_DO) {
-        if (events & GPIO_IRQ_EDGE_FALL) {
-            a_last_fall_us = now;                  // went LOW (BLACK active)
-        } else if ((events & GPIO_IRQ_EDGE_RISE) && a_last_fall_us) {
-            a_low_pw_us = now - a_last_fall_us;    // LOW pulse finished
-        }
-    } else if (gpio == B_PIN_DO) {
-        if (events & GPIO_IRQ_EDGE_FALL) {
-            b_last_fall_us = now;
-        } else if ((events & GPIO_IRQ_EDGE_RISE) && b_last_fall_us) {
-            b_low_pw_us = now - b_last_fall_us;
-        }
-    }
+// --- 3. HELPER FUNCTION TO PRINT DATA ---
+void print_sensor_data(const char* label, uint16_t adc, const char* do_state, uint64_t black_time) {
+    printf("%s: ADC=%4d %s DO=%s black_time=%10llu us  ", 
+           label, adc, (adc > THRESHOLD_A || adc > THRESHOLD_B) ? "BLACK" : "WHITE", do_state, black_time);
 }
 
-int main() {
+
+// --- 4. INITIALIZATION FUNCTION ---
+void setup() {
+    // Initialize USB serial communication
     stdio_init_all();
-    sleep_ms(300);
+    sleep_ms(2000); // Wait for terminal to connect
+    printf("---- Opened the serial port COM10 ----\n");
 
-    printf("\nIR line sensor demo — TWO sensors (ADC contrast + DO LOW pulse width)\n");
-
-    // -------- ADC init --------
+    // Initialize ADC hardware
     adc_init();
-    adc_gpio_init(26 + A_ADC_INPUT);   // A analog (GP26/27/28)
-#if B_USE_ADC
-    adc_gpio_init(26 + B_ADC_INPUT);   // B analog (GP26/27/28)
-#endif
 
-    // -------- Digital pins init (DO) --------
-    gpio_init(A_PIN_DO);
-    gpio_set_dir(A_PIN_DO, GPIO_IN);
-    gpio_pull_up(A_PIN_DO);            // open-collector DO (idle HIGH, active LOW)
+    // Configure ADC GPIO pins
+    adc_gpio_init(ADC_PIN_A);
+    adc_gpio_init(ADC_PIN_B);
 
-    gpio_init(B_PIN_DO);
-    gpio_set_dir(B_PIN_DO, GPIO_IN);
-    gpio_pull_up(B_PIN_DO);
+    // Optional: Initialize IR Emitter Pin
+    // gpio_init(IR_EMITTER_PIN);
+    // gpio_set_dir(IR_EMITTER_PIN, GPIO_OUT);
+    // gpio_put(IR_EMITTER_PIN, 1); // Turn IR emitter ON
+}
 
-    // IRQs for LOW pulse width on both DOs (need both edges)
-    gpio_set_irq_enabled_with_callback(A_PIN_DO, GPIO_IRQ_EDGE_RISE | GPIO_IRQ_EDGE_FALL, true, &do_irq);
-    gpio_set_irq_enabled(B_PIN_DO, GPIO_IRQ_EDGE_RISE | GPIO_IRQ_EDGE_FALL, true);
 
-    // -------- Baseline/thresholds from ambient --------
-    // We’ll classify BLACK when ADC is significantly ABOVE ambient average.
-    // (Many breakout circuits produce higher ADC codes on dark/black.)
-    // If your wiring yields the inverse, flip the comparison below.
-    // Sensor A
-    adc_select_input(A_ADC_INPUT);
-    uint32_t sumA = 0;
-    for (int i = 0; i < 50; i++) { sumA += adc_read(); sleep_ms(5); }
-    uint16_t avgA = sumA / 50;
-    int16_t threshA = (int16_t)avgA + 200;  // above ambient => BLACK
-    if (threshA > 4095) threshA = 4095;
+// --- 5. MAIN LOOP ---
+int main() {
+    setup();
 
-    // Sensor B (since we enabled analog)
-#if B_USE_ADC
-    adc_select_input(B_ADC_INPUT);
-    uint32_t sumB = 0;
-    for (int i = 0; i < 50; i++) { sumB += adc_read(); sleep_ms(5); }
-    uint16_t avgB = sumB / 50;
-    int16_t threshB = (int16_t)avgB + 200;  // above ambient => BLACK
-    if (threshB > 4095) threshB = 4095;
-#endif
+    while (1) {
+        // --- 6. READ ADC VALUES ---
+        adc_select_input(0); // Select ADC0 (Sensor A)
+        uint16_t adc_A = adc_read();
 
-    printf("A: ADC on GP%u, DO on GP%u | ambient=%u, thresh_black=%d\n",
-           26 + A_ADC_INPUT, A_PIN_DO, avgA, threshA);
-#if B_USE_ADC
-    printf("B: ADC on GP%u, DO on GP%u | ambient=%u, thresh_black=%d\n",
-           26 + B_ADC_INPUT, B_PIN_DO, avgB, threshB);
-#else
-    printf("B: DO on GP%u only (no analog)\n", B_PIN_DO);
-#endif
+        adc_select_input(1); // Select ADC1 (Sensor B)
+        uint16_t adc_B = adc_read();
 
-    while (true) {
-        // -------- Sensor A (ADC + DO + LOW pulse width) --------
-        adc_select_input(A_ADC_INPUT);
-        uint16_t a_adc = adc_read();                // 0..4095
-        bool a_black_adc = ((int)a_adc > threshA);  // above threshold => BLACK
-        int a_do_raw = gpio_get(A_PIN_DO);          // 0 = active (BLACK), 1 = idle (WHITE)
-        bool a_black_do = (a_do_raw == 1);
-        uint32_t a_pw = a_low_pw_us;                // LOW-time in microseconds
+        // --- 7. DIGITAL STATE LOGIC (DO) ---
+        // Logic: Low ADC (High Reflectance) = Sensor on WHITE LINE (Active)
+        bool is_active_A = (adc_A < THRESHOLD_A); 
+        bool is_active_B = (adc_B < THRESHOLD_B); 
 
-        // -------- Sensor B (ADC + DO + LOW pulse width) --------
-#if B_USE_ADC
-        adc_select_input(B_ADC_INPUT);
-        uint16_t b_adc = adc_read();
-        bool b_black_adc = ((int)b_adc > threshB);
-#else
-        uint16_t b_adc = 0;
-        bool b_black_adc = false;
-#endif
-        int b_do_raw = gpio_get(B_PIN_DO);
-        bool b_black_do = (b_do_raw == 1);
-        uint32_t b_pw = b_low_pw_us;
+        // Set the state string to be printed in the log (DO=BLACK means on the line)
+        const char* do_state_A = is_active_A ? "BLACK" : "WHITE"; 
+        const char* do_state_B = is_active_B ? "BLACK" : "WHITE"; 
 
-        // -------- Print a compact, human-friendly status line --------
-#if B_USE_ADC
-        printf("A: ADC=%4u %-5s  DO=%s  low_pw=%6lu us   |   B: ADC=%4u %-5s  DO=%s  low_pw=%6lu us\n",
-               a_adc, a_black_adc ? "BLACK" : "WHITE",
-               a_black_do ? "BLACK" : "WHITE", (unsigned long)a_pw,
-               b_adc, b_black_adc ? "BLACK" : "WHITE",
-               b_black_do ? "BLACK" : "WHITE", (unsigned long)b_pw);
-#else
-        printf("A: ADC=%4u %-5s  DO=%s  low_pw=%6lu us   |   B: DO=%s  low_pw=%6lu us\n",
-               a_adc, a_black_adc ? "BLACK" : "WHITE",
-               a_black_do ? "BLACK" : "WHITE", (unsigned long)a_pw,
-               b_black_do ? "BLACK" : "WHITE", (unsigned long)b_pw);
-#endif
+        // --- 8. CALCULATE BARCODE TIME (Time spent on BLACK segment) ---
+        uint64_t current_micros = time_us_64();
+        
+        // DECLARATION: Fixes the 'undeclared' error from your previous compile log
+        uint64_t log_black_time_A; 
+        uint64_t log_black_time_B;
 
-        sleep_ms(LOOP_MS);
+        // Logic for Sensor A: Timer runs when NOT active (i.e., on the BLACK segment)
+        if (!is_active_A) { // <-- Timer starts/runs when over Black Floor (Barcode Segment)
+            if (last_active_micros_A == 0) {
+                last_active_micros_A = current_micros;
+                log_black_time_A = 0; 
+            } else {
+                log_black_time_A = current_micros - last_active_micros_A;
+            }
+        } else { // Timer resets when sensor is over the White Line
+            last_active_micros_A = 0; 
+            log_black_time_A = 0; 
+        }
+
+        // Logic for Sensor B: Timer runs when NOT active (i.e., on the BLACK segment)
+        if (!is_active_B) { // <-- Timer starts/runs when over Black Floor (Barcode Segment)
+            if (last_active_micros_B == 0) {
+                last_active_micros_B = current_micros; 
+                log_black_time_B = 0;
+            } else {
+                log_black_time_B = current_micros - last_active_micros_B;
+            }
+        } else { // Timer resets when sensor is over the White Line
+            last_active_micros_B = 0; 
+            log_black_time_B = 0;
+        }
+
+        // --- 9. PRINT RESULTS ---
+        print_sensor_data("A", adc_A, do_state_A, log_black_time_A);
+        printf("  |  ");
+        print_sensor_data("B", adc_B, do_state_B, log_black_time_B);
+        printf("\n");
+
+        sleep_ms(50); // Control the print speed
     }
+
+    return 0; // Should not be reached
 }

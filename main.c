@@ -259,81 +259,86 @@ int main() {
         }
 
         // -------------------------------------------------------------------
-        // 1. PID LINE FOLLOWING
+        // 1. PID LINE FOLLOWING  (restored from original Demo 2 behaviour)
         // -------------------------------------------------------------------
-        float sensor_val = ls.right_on_line ? 1.0f : 0.0f; 
-        float correction = pid_update(&linePID, linePID.setpoint - sensor_val);
-        
-        float min_drive = 0.20f; 
+        float sensor_val = ls.right_on_line ? 1.0f : 0.0f;  // black = 1.0, white = 0.0
+        float error      = linePID.setpoint - sensor_val;
+        float correction = pid_update(&linePID, error);
 
-        if (ls.right_on_line) { // check if the RIGHT sensor sees the black line
-            
-            if (fabsf(correction) < 0.02f) { 
-                correction = 0.0f;
-            }
-            
-            left_speed  = base_speed - correction + CALIBRATION_BIAS; 
+        // Minimum forward drive for small positive speeds
+        float min_drive = 0.20f;
+
+        if (ls.right_on_line) {
+            // On black line -> go straight with PID correction + calibration bias
+            left_speed  = base_speed - correction + CALIBRATION_BIAS;
             right_speed = base_speed + correction;
-            
+
             last_seen_black_time = now;
 
+            // Same semantics as your original code:
+            // +corr -> drifting right (need to steer left)
+            // -corr -> drifting left (need to steer right)
             if (correction > 0.01f)
-                last_turn_dir = -1;   // drifting right -> corrected with left turn (-1)
+                last_turn_dir = +1;   // drifting right → last turn was LEFT
             else if (correction < -0.01f)
-                last_turn_dir = +1;   // drifting left -> corrected with right turn (+1)
-            else
-                last_turn_dir = 0;    // Driving straight (due to deadband)
+                last_turn_dir = -1;   // drifting left → last turn was RIGHT
+            // else keep last_turn_dir as-is
         } 
         else {
-            // --- Off the line (Recovery) ---
+            // --- Off the line ---
             uint64_t lost_duration = now - last_seen_black_time;
 
             if (lost_duration < 300000) {
-                // Short-term drift
+                // Short-term drift → follow last known direction
                 if (last_turn_dir == -1) {
-                    left_speed  = 0.20f; 
-                    right_speed = 0.45f; 
-                } else {
-                    left_speed  = 0.45f; 
-                    right_speed = 0.20f; 
+                    // last time we corrected RIGHT → so we were drifting left
+                    // bias more to RIGHT wheel (turn right)
+                    left_speed  = base_speed * 1.0f;
+                    right_speed = base_speed * 0.5f;
+                } else { 
+                    // last time we corrected LEFT → we were drifting right
+                    // bias more to LEFT wheel (turn left)
+                    left_speed  = base_speed * 0.25f;
+                    right_speed = base_speed * 1.1f;
                 }
             } 
             else {
-                // Long-term loss
+                // Lost line for a while → active search
                 printf("Line lost — probing both sides...\n");
                 bool found = false;
-                
-                // Spin LEFT search
+
+                // First spin LEFT a bit
                 for (int i = 0; i < 15; i++) {
-                    motor_set(0.30f, -0.30f); 
+                    motor_set(0.30f, -0.30f);  // left spin
                     sleep_ms(25);
                     lf_read(&ls);
-                    if (ls.right_on_line) { found = true; break; } 
+                    if (ls.right_on_line) { found = true; break; }
                 }
-                
+
                 if (!found) {
-                    // Spin RIGHT search
+                    // Then spin RIGHT if not found
                     for (int i = 0; i < 25; i++) {
-                        motor_set(-0.30f, 0.30f); 
+                        motor_set(-0.30f, 0.30f);  // right spin
                         sleep_ms(25);
                         lf_read(&ls);
                         if (ls.right_on_line) { found = true; break; }
                     }
                 }
-                
+
                 motor_set(0, 0);
                 if (found) {
                     printf("Reacquired black line! Resuming PID.\n");
                 } else {
                     printf("Still lost — reversing briefly...\n");
-                    motor_set(-0.25f, -0.25f); 
-                    sleep_ms(200); 
+                    motor_set(-0.25f, -0.25f);
+                    sleep_ms(200);
                 }
-                
-                left_speed = 0.0f;
+
+                left_speed  = 0.0f;
                 right_speed = 0.0f;
             }
         }
+
         
         // -------------------------------------------------------------------
         // 2. APPLY MOTOR SPEEDS

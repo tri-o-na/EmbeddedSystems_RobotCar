@@ -17,5 +17,6 @@ pico_sdk_init()
 add_subdirectory(other4)
 add_subdirectory(WiFi)
 add_subdirectory(imu)
+add_subdirectory(Integration)
 
 # You can add more demo folders the same way if you make them

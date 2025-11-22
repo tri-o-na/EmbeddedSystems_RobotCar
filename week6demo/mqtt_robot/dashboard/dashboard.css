@@ -1,0 +1,736 @@
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+    background-color: white;
+    min-height: 100vh;
+    padding: 20px;
+    color: #333;
+}
+
+.container {
+    max-width: 1200px;
+    margin: 0 auto;
+}
+
+header {
+    background: white;
+    border-radius: 12px;
+    padding: 20px 30px;
+    margin-bottom: 20px;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+h1 {
+    color: #667eea;
+    font-size: 28px;
+}
+
+.connection-status {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.status-indicator {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: #dc3545;
+    display: inline-block;
+}
+
+.status-indicator.connected {
+    background: #28a745;
+    animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+}
+
+.dashboard-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 30px;
+    margin-bottom: 30px;
+}
+
+@media (max-width: 768px) {
+    .dashboard-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+section {
+    background: white;
+    border-radius: 12px;
+    padding: 25px;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+}
+
+h2 {
+    color: #667eea;
+    margin-bottom: 20px;
+    font-size: 22px;
+    border-bottom: 2px solid #f0f0f0;
+    padding-bottom: 10px;
+}
+
+.telemetry-data {
+    display: flex;
+    flex-direction: column;
+    gap: 15px;
+}
+
+.data-item {
+    display: flex;
+    justify-content: space-between;
+    padding: 12px;
+    background: #f8f9fa;
+    border-radius: 8px;
+    border-left: 4px solid #667eea;
+}
+
+.data-item label {
+    font-weight: 600;
+    color: #555;
+}
+
+.data-item span {
+    font-family: 'Courier New', monospace;
+    font-size: 18px;
+    color: #333;
+    font-weight: bold;
+}
+
+.last-update {
+    margin-top: 15px;
+    font-size: 12px;
+    color: #888;
+    text-align: center;
+}
+
+.speed-display {
+    font-size: 1.3rem;
+    font-weight: bold;
+    color: #2ecc71;
+    text-shadow: 0 0 10px rgba(46, 204, 113, 0.3);
+}
+
+.control-group {
+    margin-bottom: 25px;
+}
+
+.control-group label {
+    display: block;
+    margin-bottom: 10px;
+    font-weight: 600;
+    color: #555;
+}
+
+input[type="range"] {
+    width: 100%;
+    height: 8px;
+    border-radius: 5px;
+    background: #ddd;
+    outline: none;
+    -webkit-appearance: none;
+    appearance: none;
+}
+
+input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    background: #667eea;
+    cursor: pointer;
+}
+
+input[type="range"]::-moz-range-thumb {
+    appearance: none;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    background: #667eea;
+    cursor: pointer;
+    border: none;
+}
+
+.button-group {
+    display: flex;
+    gap: 15px;
+    margin-top: 25px;
+    margin-bottom: 10px;
+}
+
+button {
+    flex: 1;
+    padding: 12px 20px;
+    border: none;
+    border-radius: 8px;
+    font-size: 16px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.3s;
+}
+
+/* Override for directional buttons - ensure they don't inherit flex: 1 */
+.btn-direction {
+    flex: none;
+}
+
+.btn-stop {
+    background: #dc3545;
+    color: white;
+}
+
+.btn-stop:hover {
+    background: #c82333;
+    transform: translateY(-2px);
+    box-shadow: 0 4px 8px rgba(220, 53, 69, 0.3);
+}
+
+.btn-zero {
+    background: #6c757d;
+    color: white;
+}
+
+.btn-zero:hover {
+    background: #5a6268;
+    transform: translateY(-2px);
+}
+
+.directional-controls {
+    margin-top: 35px;
+    padding: 30px;
+    padding-bottom: 20px;
+    background: linear-gradient(135deg, #f8f9ff 0%, #ffffff 100%);
+    border-radius: 12px;
+    border: 1px solid #e8eaf6;
+}
+
+.directional-controls h3 {
+    margin: 0 0 25px 0;
+    font-size: 1.3em;
+    color: #667eea;
+    font-weight: 700;
+    text-align: center;
+    letter-spacing: 0.5px;
+}
+
+.direction-buttons {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 20px;
+    margin: 0;
+}
+
+.btn-direction {
+    padding: 20px 28px;
+    font-size: 17px;
+    border: none;
+    border-radius: 12px;
+    cursor: pointer;
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    font-weight: 700;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15), 0 2px 4px rgba(0, 0, 0, 0.1);
+    min-height: 70px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    letter-spacing: 0.3px;
+    position: relative;
+    overflow: visible;
+    gap: 10px;
+}
+
+.direction-text {
+    position: relative;
+    z-index: 2;
+}
+
+.direction-indicator {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.3);
+    border: 2px solid rgba(255, 255, 255, 0.5);
+    transition: all 0.3s;
+    opacity: 0;
+    transform: scale(0);
+    z-index: 3;
+}
+
+.btn-direction.active .direction-indicator {
+    opacity: 1;
+    transform: scale(1);
+    background: rgba(255, 255, 255, 0.95);
+    border-color: rgba(255, 255, 255, 1);
+    box-shadow: 0 0 8px rgba(255, 255, 255, 0.8),
+                0 0 16px rgba(255, 255, 255, 0.6);
+    animation: indicator-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes indicator-pulse {
+    0%, 100% {
+        transform: scale(1);
+        opacity: 1;
+    }
+    50% {
+        transform: scale(1.3);
+        opacity: 0.8;
+    }
+}
+
+/* Color-specific indicator glows */
+.btn-forward.active .direction-indicator {
+    background: #10b981;
+    border-color: #10b981;
+    box-shadow: 0 0 8px rgba(16, 185, 129, 0.8),
+                0 0 16px rgba(16, 185, 129, 0.6),
+                0 0 24px rgba(16, 185, 129, 0.4);
+}
+
+.btn-backward.active .direction-indicator {
+    background: #ef4444;
+    border-color: #ef4444;
+    box-shadow: 0 0 8px rgba(239, 68, 68, 0.8),
+                0 0 16px rgba(239, 68, 68, 0.6),
+                0 0 24px rgba(239, 68, 68, 0.4);
+}
+
+.btn-clockwise.active .direction-indicator {
+    background: #3b82f6;
+    border-color: #3b82f6;
+    box-shadow: 0 0 8px rgba(59, 130, 246, 0.8),
+                0 0 16px rgba(59, 130, 246, 0.6),
+                0 0 24px rgba(59, 130, 246, 0.4);
+}
+
+.btn-anticlockwise.active .direction-indicator {
+    background: #f59e0b;
+    border-color: #f59e0b;
+    box-shadow: 0 0 8px rgba(245, 158, 11, 0.8),
+                0 0 16px rgba(245, 158, 11, 0.6),
+                0 0 24px rgba(245, 158, 11, 0.4);
+}
+
+.btn-direction::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: -100%;
+    width: 100%;
+    height: 100%;
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.3), transparent);
+    transition: left 0.5s;
+}
+
+.btn-direction:hover::before {
+    left: 100%;
+}
+
+.btn-direction:hover {
+    transform: translateY(-3px) scale(1.02);
+    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.25), 0 4px 8px rgba(0, 0, 0, 0.15);
+}
+
+.btn-direction:active {
+    transform: translateY(-1px) scale(0.98);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+}
+
+/* Active state - when button is pressed */
+.btn-direction.active {
+    transform: translateY(-2px) scale(1.03);
+    box-shadow: 0 0 0 4px rgba(255, 255, 255, 0.5),
+                0 8px 24px rgba(0, 0, 0, 0.3),
+                0 4px 12px rgba(0, 0, 0, 0.2);
+    border: 3px solid rgba(255, 255, 255, 0.9);
+}
+
+/* Pulsing animation when pressed */
+.btn-direction.pulsing {
+    animation: pulse-glow 0.6s ease-out;
+}
+
+@keyframes pulse-glow {
+    0% {
+        box-shadow: 0 0 0 0 rgba(255, 255, 255, 0.7),
+                    0 8px 24px rgba(0, 0, 0, 0.3);
+    }
+    50% {
+        box-shadow: 0 0 0 8px rgba(255, 255, 255, 0.3),
+                    0 8px 24px rgba(0, 0, 0, 0.3),
+                    0 0 20px rgba(255, 255, 255, 0.5);
+    }
+    100% {
+        box-shadow: 0 0 0 4px rgba(255, 255, 255, 0.5),
+                    0 8px 24px rgba(0, 0, 0, 0.3),
+                    0 4px 12px rgba(0, 0, 0, 0.2);
+    }
+}
+
+/* Color-specific active states */
+.btn-forward.active {
+    box-shadow: 0 0 0 4px rgba(16, 185, 129, 0.4),
+                0 8px 24px rgba(16, 185, 129, 0.5),
+                0 4px 12px rgba(0, 0, 0, 0.2);
+    border-color: rgba(16, 185, 129, 0.8);
+}
+
+.btn-backward.active {
+    box-shadow: 0 0 0 4px rgba(239, 68, 68, 0.4),
+                0 8px 24px rgba(239, 68, 68, 0.5),
+                0 4px 12px rgba(0, 0, 0, 0.2);
+    border-color: rgba(239, 68, 68, 0.8);
+}
+
+.btn-clockwise.active {
+    box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.4),
+                0 8px 24px rgba(59, 130, 246, 0.5),
+                0 4px 12px rgba(0, 0, 0, 0.2);
+    border-color: rgba(59, 130, 246, 0.8);
+}
+
+.btn-anticlockwise.active {
+    box-shadow: 0 0 0 4px rgba(245, 158, 11, 0.4),
+                0 8px 24px rgba(245, 158, 11, 0.5),
+                0 4px 12px rgba(0, 0, 0, 0.2);
+    border-color: rgba(245, 158, 11, 0.8);
+}
+
+.btn-forward {
+    background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+    color: white;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+}
+
+.btn-forward:hover {
+    background: linear-gradient(135deg, #059669 0%, #047857 100%);
+    box-shadow: 0 8px 24px rgba(16, 185, 129, 0.4), 0 4px 8px rgba(0, 0, 0, 0.15);
+}
+
+.btn-backward {
+    background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+    color: white;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+}
+
+.btn-backward:hover {
+    background: linear-gradient(135deg, #dc2626 0%, #b91c1c 100%);
+    box-shadow: 0 8px 24px rgba(239, 68, 68, 0.4), 0 4px 8px rgba(0, 0, 0, 0.15);
+}
+
+.btn-clockwise {
+    background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
+    color: white;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+}
+
+.btn-clockwise:hover {
+    background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
+    box-shadow: 0 8px 24px rgba(59, 130, 246, 0.4), 0 4px 8px rgba(0, 0, 0, 0.15);
+}
+
+.btn-anticlockwise {
+    background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+    color: white;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+}
+
+.btn-anticlockwise:hover {
+    background: linear-gradient(135deg, #d97706 0%, #b45309 100%);
+    box-shadow: 0 8px 24px rgba(245, 158, 11, 0.4), 0 4px 8px rgba(0, 0, 0, 0.15);
+}
+
+.command-status {
+    margin-top: 15px;
+    padding: 10px;
+    border-radius: 6px;
+    font-size: 14px;
+    text-align: center;
+    min-height: 40px;
+}
+
+.command-status.success {
+    background: #d4edda;
+    color: #155724;
+}
+
+.command-status.error {
+    background: #f8d7da;
+    color: #721c24;
+}
+
+.config-panel {
+    grid-column: 1 / -1;
+}
+
+.config-container {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+}
+
+.config-inputs {
+    display: grid;
+    grid-template-columns: auto auto 1fr;
+    gap: 20px;
+    align-items: end;
+}
+
+.input-group {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.input-group label {
+    font-weight: 600;
+    color: #555;
+    font-size: 14px;
+    margin-bottom: 4px;
+}
+
+.input-group input {
+    padding: 12px 16px;
+    border: 2px solid #e0e0e0;
+    border-radius: 8px;
+    font-size: 15px;
+    width: 180px;
+    transition: all 0.2s;
+    background: #fafafa;
+}
+
+.input-group input:focus {
+    outline: none;
+    border-color: #667eea;
+    background: white;
+    box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+}
+
+.input-hint {
+    font-size: 12px;
+    color: #888;
+    margin-top: 4px;
+}
+
+.connect-button-wrapper {
+    display: flex;
+    align-items: end;
+}
+
+.btn-connect {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    padding: 12px 30px;
+    font-size: 16px;
+    font-weight: 600;
+    border-radius: 8px;
+    box-shadow: 0 2px 8px rgba(102, 126, 234, 0.3);
+    transition: all 0.3s;
+    white-space: nowrap;
+}
+
+.btn-connect:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+}
+
+.btn-connect:active {
+    transform: translateY(0);
+}
+
+.config-note {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 16px;
+    background: #f0f4ff;
+    border-radius: 8px;
+    border-left: 4px solid #667eea;
+    font-size: 13px;
+    color: #555;
+}
+
+.info-icon {
+    font-size: 18px;
+}
+
+@media (max-width: 768px) {
+    .config-inputs {
+        grid-template-columns: 1fr;
+        gap: 15px;
+    }
+    
+    .input-group input {
+        width: 100%;
+    }
+    
+    .connect-button-wrapper {
+        width: 100%;
+    }
+    
+    .btn-connect {
+        width: 100%;
+    }
+    
+    .directional-controls {
+        padding: 20px;
+        margin-top: 25px;
+    }
+    
+    .direction-buttons {
+        grid-template-columns: 1fr;
+        gap: 15px;
+    }
+    
+    .button-group {
+        flex-direction: column;
+        gap: 12px;
+    }
+    
+    .btn-direction {
+        min-height: 65px;
+        padding: 18px 24px;
+        font-size: 16px;
+    }
+}
+
+/* ============================================================
+   Line Following Panel Styles
+   ============================================================ */
+.line-follow-panel {
+    background: linear-gradient(135deg, #f0f9ff 0%, #ffffff 100%);
+    border-radius: 12px;
+    padding: 30px;
+    border: 1px solid #e0e7ff;
+    margin-bottom: 25px;
+}
+
+.line-follow-panel h2 {
+    color: #3b82f6;
+    margin-bottom: 25px;
+    font-size: 1.4em;
+}
+
+.mode-controls {
+    display: flex;
+    gap: 20px;
+    margin-bottom: 25px;
+}
+
+.btn-mode {
+    flex: 1;
+    padding: 12px 20px;
+    font-size: 16px;
+    border-radius: 8px;
+    border: 2px solid #3b82f6;
+    background: white;
+    color: #3b82f6;
+    cursor: pointer;
+    transition: all 0.3s;
+    font-weight: 600;
+}
+
+.btn-mode:hover {
+    background: #3b82f6;
+    color: white;
+    transform: translateY(-2px);
+    box-shadow: 0 4px 8px rgba(59, 130, 246, 0.3);
+}
+
+.btn-mode.active {
+    background: #3b82f6;
+    color: white;
+    box-shadow: 0 2px 4px rgba(59, 130, 246, 0.4);
+}
+
+.line-sensor-data {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 18px;
+    margin-bottom: 20px;
+}
+
+.mode-status {
+    text-align: center;
+    padding: 15px;
+    background: #eff6ff;
+    border-radius: 8px;
+    font-weight: 600;
+    color: #1e40af;
+    margin-top: 10px;
+}
+
+/* ============================================================
+   Barcode Panel Styles
+   ============================================================ */
+.barcode-panel {
+    background: linear-gradient(135deg, #fef3c7 0%, #ffffff 100%);
+    border-radius: 12px;
+    padding: 30px;
+    border: 1px solid #fde68a;
+    margin-bottom: 25px;
+}
+
+.barcode-panel h2 {
+    color: #f59e0b;
+    margin-bottom: 25px;
+    font-size: 1.4em;
+}
+
+.barcode-controls {
+    display: flex;
+    gap: 20px;
+    margin-bottom: 25px;
+}
+
+.barcode-display {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+}
+
+.barcode-message {
+    padding: 20px;
+    background: #fffbeb;
+    border-radius: 8px;
+    border: 2px solid #fde68a;
+}
+
+.barcode-message label {
+    display: block;
+    margin-bottom: 12px;
+    font-weight: 600;
+    color: #92400e;
+}
+
+.barcode-text {
+    font-family: 'Courier New', monospace;
+    font-size: 18px;
+    font-weight: bold;
+    color: #92400e;
+    min-height: 40px;
+    padding: 15px;
+    background: white;
+    border-radius: 6px;
+    border: 1px solid #fde68a;
+    word-break: break-all;
+}
+

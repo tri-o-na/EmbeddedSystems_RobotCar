@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Robot Car Dashboard</title>
+    <link rel="stylesheet" href="dashboard.css">
+    <script src="https://unpkg.com/mqtt@5/dist/mqtt.min.js"></script>
+</head>
+
+<body>
+    <div class="container">
+        <header>
+            <h1>🤖 Robot Car Control Dashboard</h1>
+            <div class="connection-status" id="connectionStatus">
+                <span class="status-indicator" id="statusIndicator"></span>
+                <span id="statusText">Disconnected</span>
+            </div>
+        </header>
+
+        <div class="dashboard-grid">
+            <!-- Telemetry Section -->
+            <section class="telemetry-panel">
+                <h2>Telemetry Data</h2>
+                <div class="telemetry-data">
+                    <div class="data-item">
+                        <label>Left Encoder (μs):</label>
+                        <span id="enc1">--</span>
+                    </div>
+                    <div class="data-item">
+                        <label>Right Encoder (μs):</label>
+                        <span id="enc2">--</span>
+                    </div>
+                    <div class="data-item">
+                        <label>Timestamp:</label>
+                        <span id="timestamp">--</span>
+                    </div>
+                    <div class="data-item">
+                        <label>Speed (Average):</label>
+                        <span id="speedKmh" class="speed-display">--</span> km/h
+                    </div>
+                    <div class="data-item">
+                        <label>Left Wheel Speed:</label>
+                        <span id="speedLeft">--</span> km/h
+                    </div>
+                    <div class="data-item">
+                        <label>Right Wheel Speed:</label>
+                        <span id="speedRight">--</span> km/h
+                    </div>
+                </div>
+                <div class="last-update">
+                    Last update: <span id="lastUpdate">Never</span>
+                </div>
+            </section>
+
+            <!-- Control Section -->
+            <section class="control-panel">
+                <h2>Motor Control</h2>
+
+                <div class="control-group">
+                    <label for="motor1Slider">Motor 1: <span id="motor1Value">0.00</span></label>
+                    <input type="range" id="motor1Slider" min="-1" max="1" step="0.01" value="0"
+                        oninput="updateMotorDisplay(1, this.value)">
+                </div>
+
+                <div class="control-group">
+                    <label for="motor2Slider">Motor 2: <span id="motor2Value">0.00</span></label>
+                    <input type="range" id="motor2Slider" min="-1" max="1" step="0.01" value="0"
+                        oninput="updateMotorDisplay(2, this.value)">
+                </div>
+
+                <div class="button-group">
+                    <button onclick="sendStop()" class="btn-stop">Emergency Stop</button>
+                    <button onclick="sendZero()" class="btn-zero">Set to Zero</button>
+                </div>
+
+                <!-- Directional Control Buttons -->
+                <div class="directional-controls">
+                    <div class="direction-buttons">
+                        <button onclick="sendDirection('straight', event)">
+                            <span class="direction-indicator"></span>
+                            <span class="direction-text">⬆️ Straight</span>
+                        </button>
+                        <button onclick="sendDirection('backward', event)">
+                            <span class="direction-indicator"></span>
+                            <span class="direction-text">⬇️ Backward</span>
+                        </button>
+                        <button onclick="sendDirection('clockwise', event)">
+                            <span class="direction-indicator"></span>
+                            <span class="direction-text">↻ Clockwise</span>
+                        </button>
+                        <button onclick="sendDirection('anticlockwise', event)">
+                            <span class="direction-indicator"></span>
+                            <span class="direction-text">↺ Anticlockwise</span>
+                        </button>
+                    </div>
+                </div>
+
+                <div class="command-status" id="commandStatus"></div>
+            </section>
+
+            <!-- Barcode Section -->
+            <section class="barcode-panel">
+                <h2>Barcode Reader</h2>
+                <div class="barcode-controls">
+                    <button onclick="enableBarcode()" id="barcodeEnableBtn" class="btn-mode">Enable Barcode</button>
+                    <button onclick="disableBarcode()" id="barcodeDisableBtn" class="btn-mode">Disable Barcode</button>
+                </div>
+                <div class="barcode-display">
+                    <div class="barcode-message">
+                        <label>Decoded Message:</label>
+                        <div id="barcodeMessage" class="barcode-text">--</div>
+                    </div>
+                    <div class="data-item">
+                        <label>Message Length:</label>
+                        <span id="barcodeLength">0</span>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Line Following Section -->
+            <section class="line-follow-panel">
+                <h2>Line Following</h2>
+                <div class="mode-controls">
+                    <button onclick="enableLineFollowing()" id="lineFollowBtn" class="btn-mode">Line Following</button>
+                    <button onclick="enableIMUStraight()" id="imuStraightBtn" class="btn-mode">IMU Straight</button>
+                    <button onclick="enableManualMode()" id="manualBtn" class="btn-mode">Manual Control</button>
+                </div>
+                <div class="line-sensor-data">
+                    <div class="data-item">
+                        <label>ADC Value:</label>
+                        <span id="lineADC">--</span>
+                    </div>
+                    <div class="data-item">
+                        <label>On Line:</label>
+                        <span id="onLine">--</span>
+                    </div>
+                    <div class="data-item">
+                        <label>Error:</label>
+                        <span id="lineError">--</span>
+                    </div>
+                    <div class="data-item">
+                        <label>Correction:</label>
+                        <span id="lineCorrection">--</span>
+                    </div>
+                </div>
+                <div class="mode-status">
+                    <span id="modeStatus">Mode: Manual</span>
+                </div>
+            </section>
+
+            <!-- IMU Data Section -->
+            <section class="imu-panel">
+                <h2>IMU Data & Straight-Line Navigation</h2>
+                <div class="imu-data">
+                    <div class="data-item">
+                        <label>Heading (Raw):</label>
+                        <span id="headingRaw">--</span>°
+                    </div>
+                    <div class="data-item">
+                        <label>Heading (Filtered):</label>
+                        <span id="headingFiltered" class="highlight-value">--</span>°
+                    </div>
+                    <div class="data-item">
+                        <label>Distance Traveled:</label>
+                        <span id="distanceTraveled">--</span> m
+                    </div>
+                    <div class="data-item">
+                        <label>PID Correction:</label>
+                        <span id="imuCorrection">--</span>
+                    </div>
+                    <div class="data-item">
+                        <label>Accel X:</label>
+                        <span id="accelX">--</span> g
+                    </div>
+                    <div class="data-item">
+                        <label>Accel Y:</label>
+                        <span id="accelY">--</span> g
+                    </div>
+                    <div class="data-item">
+                        <label>Accel Z:</label>
+                        <span id="accelZ">--</span> g
+                    </div>
+                </div>
+            </section>
+        </div>
+
+        <!-- Configuration Section -->
+        <section class="config-panel">
+            <h2>MQTT Configuration</h2>
+            <div class="config-container">
+                <div class="config-inputs">
+                    <div class="input-group">
+                        <label for="brokerIP">Broker IP Address</label>
+                        <input type="text" id="brokerIP" value="172.20.10.4" placeholder="172.20.10.4">
+                    </div>
+                    <div class="input-group">
+                        <label for="brokerPort">Broker Port</label>
+                        <input type="number" id="brokerPort" value="9001" placeholder="9001">
+                    </div>
+                    <div class="connect-button-wrapper">
+                        <button onclick="connectMQTT()" id="connectBtn" class="btn-connect">Connect to Broker</button>
+                    </div>
+                </div>
+
+            </div>
+        </section>
+    </div>
+
+    <script src="dashboard.js"></script>
+</body>
+
+</html>

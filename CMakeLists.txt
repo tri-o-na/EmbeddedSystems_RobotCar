@@ -57,8 +57,153 @@ target_link_libraries(RobotCar_Integration
     hardware_irq
     hardware_timer
     hardware_adc
+    hardware_timer
+)
+pico_add_extra_outputs(ir_line_sensor)
+
+# Accelerometer (MPU6050 over I2C)
+add_executable(accel_raw_mpu6050
+    week6demo/other4/src/accel_raw_mpu6050.c
+)
+pico_enable_stdio_usb(accel_raw_mpu6050 1)
+pico_enable_stdio_uart(accel_raw_mpu6050 0)
+target_link_libraries(accel_raw_mpu6050
+    pico_stdlib
+    hardware_i2c
+)
+pico_add_extra_outputs(accel_raw_mpu6050)
+
+# Ultrasonic sensor
+add_executable(ultrasonic_hcsr04
+    week6demo/other4/src/ultrasonic_hcsr04.c
+)
+pico_enable_stdio_usb(ultrasonic_hcsr04 1)
+pico_enable_stdio_uart(ultrasonic_hcsr04 0)
+target_link_libraries(ultrasonic_hcsr04
+    pico_stdlib
+    hardware_timer
+)
+pico_add_extra_outputs(ultrasonic_hcsr04)
+
+
+
+# --- lab ultrasonic ---
+add_executable(ultrasonic
+    week6demo/ultrasonic/main.c
+    week6demo/ultrasonic/ultrasonic.c
+    week6demo/ultrasonic/ultrasonicObject.cpp   # <-- include if you actually use it
 )
 
-pico_enable_stdio_usb(RobotCar_Integration 1)
-pico_enable_stdio_uart(RobotCar_Integration 0)
-pico_add_extra_outputs(RobotCar_Integration)
+target_include_directories(ultrasonic PRIVATE
+    ${CMAKE_CURRENT_LIST_DIR}/week6demo/ultrasonic
+)
+
+pico_enable_stdio_usb(ultrasonic 1)
+pico_enable_stdio_uart(ultrasonic 0)
+
+target_link_libraries(ultrasonic
+    pico_stdlib
+    hardware_gpio
+    hardware_timer
+)
+
+pico_add_extra_outputs(ultrasonic)
+
+# IMU test (MPU6050)
+add_executable(imu_test
+    week6demo/imu/src/imu_test.c
+    week6demo/imu/src/imu.c
+)
+target_include_directories(imu_test PRIVATE week6demo/imu/include)
+target_link_libraries(imu_test pico_stdlib hardware_i2c)
+pico_enable_stdio_usb(imu_test 1)
+pico_enable_stdio_uart(imu_test 0)
+pico_add_extra_outputs(imu_test)
+
+# I2C Scanner
+add_executable(i2c_scanner
+    week6demo/imu/src/i2c_scanner.c
+)
+target_include_directories(i2c_scanner PRIVATE week6demo/imu/include)
+target_link_libraries(i2c_scanner pico_stdlib hardware_i2c)
+pico_enable_stdio_usb(i2c_scanner 1)
+pico_enable_stdio_uart(i2c_scanner 0)
+pico_add_extra_outputs(i2c_scanner)
+
+
+
+# =========================
+# ---- Integration Demo ----
+# =========================
+# Integration Demo (LIS3DH)
+add_executable(Integration
+    week6demo/Integration/main.c
+    week6demo/Integration/imu_lis3dh.c
+    week6demo/Integration/motor_encoder.c
+    week6demo/Integration/pid.c
+    week6demo/Integration/line_follow.c
+    week6demo/Integration/barcode.c
+)
+
+target_include_directories(Integration PRIVATE
+    ${CMAKE_CURRENT_LIST_DIR}/week6demo/Integration
+)
+
+target_link_libraries(Integration
+    pico_stdlib
+    hardware_i2c
+    hardware_pwm
+    hardware_irq
+    hardware_timer
+    hardware_adc
+)
+
+pico_enable_stdio_usb(Integration 1)
+pico_enable_stdio_uart(Integration 0)
+pico_add_extra_outputs(Integration)
+
+
+# =========================
+# ---- MQTT Robot Car ----
+# =========================
+# MQTT Robot Car (Phase 2: Real hardware integration)
+add_executable(mqtt_robot
+    week6demo/mqtt_robot/src/main.c
+    week6demo/mqtt_robot/src/mqtt_pico.c
+    week6demo/Integration/motor_encoder.c
+    week6demo/Integration/barcode.c
+    week6demo/Integration/line_follow.c
+    week6demo/Integration/pid.c
+    week6demo/Integration/imu_lis3dh.c
+)
+
+# Add lwIP MQTT source file manually (needed because apps are not auto-included)
+# Find Pico SDK path
+if(DEFINED ENV{HOME})
+    set(PICO_SDK_LWIP_MQTT_PATH "$ENV{HOME}/.pico-sdk/sdk/2.2.0/lib/lwip/src/apps/mqtt/mqtt.c")
+    if(EXISTS ${PICO_SDK_LWIP_MQTT_PATH})
+        target_sources(mqtt_robot PRIVATE ${PICO_SDK_LWIP_MQTT_PATH})
+    else()
+        message(WARNING "MQTT source file not found at ${PICO_SDK_LWIP_MQTT_PATH}")
+    endif()
+endif()
+
+target_include_directories(mqtt_robot PRIVATE
+    ${CMAKE_CURRENT_LIST_DIR}/week6demo/mqtt_robot/include
+    ${CMAKE_CURRENT_LIST_DIR}/week6demo/Integration
+)
+
+pico_enable_stdio_usb(mqtt_robot 1)
+pico_enable_stdio_uart(mqtt_robot 0)
+
+target_link_libraries(mqtt_robot
+    pico_stdlib
+    pico_cyw43_arch_lwip_threadsafe_background
+    hardware_pwm
+    hardware_irq
+    hardware_timer
+    hardware_adc
+    hardware_i2c
+)
+
+pico_add_extra_outputs(mqtt_robot)

@@ -1,47 +1,88 @@
-## Robot Car (Raspberry Pi Pico W)
+# EmbeddedSystems_RobotCar
 
-### Goal
-- Control two DC motors with variable speed and capture wheel encoder pulse width data while rotating.
-- Execute a repeatable motion sequence (loops forever):
-  - Rotate clockwise 2 s
-  - Rotate counter-clockwise 2 s
-  - Drive forward 2 s
-  - Drive backward 2 s
-  - Pause 1 s
+### Robotic Car Group Project – AY25/26
 
-### Hardware
-- Dual H-bridge motor driver (e.g., L298N / TB6612FNG / DRV8833).
-- Common ground shared between Pico W, driver, and motor power supply.
-- Wheel encoders available (channel A used; channel B optional).
+---
 
-### Pin Mapping
-- Motor 1 (left) — Cytron Robo Pico
-  - M1A (PWM): GP8
-  - M1B (PWM): GP9
-- Motor 2 (right) — Cytron Robo Pico
-  - M2A (PWM): GP10
-  - M2B (PWM): GP11
-- Encoders
-  - ENC1_A: GP14
-  - ENC2_A: GP15
+## 🔍 Overview
+This project showcases an **intelligent autonomous line-following robot** built using the **Raspberry Pi Pico W**. The car integrates multiple sensors and subsystems to perform real-time navigation, obstacle avoidance, barcode decoding, and telemetry streaming via MQTT.
 
-If the driver has a STBY/EN pin (e.g., TB6612FNG), assign it a GPIO and set high to enable.
+---
 
-### Behavior
-- The program in `week6demo/other4/src/motor_encoder.c` performs the motion loop above.
-- It ramps speed within each 2 s segment (about 30% → 90%) and prints encoder pulse widths over USB.
+## 🔧 Key Features
+1. **Line Following (PID-Controlled)**
+   - Single IR sensor used for line detection.
+   - PID algorithm ensures smooth and accurate tracking.
 
-### Build and Flash (generic)
+2. **Barcode Navigation**
+   - Code39 barcodes embedded on the track instruct the robot (LEFT / RIGHT / STOP / U-TURN).
+   - Barcode decoding handled by a separate IR sensor.
+
+3. **Obstacle Detection and Avoidance**
+   - Ultrasonic sensor mounted on a servo performs environmental scanning.
+   - Calculates obstacle width and determines the optimal path (left or right).
+   - Automatically rejoins the line after detouring.
+
+4. **MQTT Telemetry Dashboard**
+   - Live data streaming via WiFi and MQTT.
+   - Dashboard visualizes: speed, distance, line position, heading, obstacle width, and state transitions.
+
+---
+
+## 🛠️ Hardware Components
+- **Raspberry Pi Pico W (RP2040)**
+- **Motor Driver** (TB6612FNG / L298N)
+- **DC Motors** with wheel encoders
+- **IR Line Sensor(s)**
+- **Ultrasonic Sensor (HC-SR04)** with **Servo (SG90)**
+- **IMU**
+- **Power supply and common ground**
+
+---
+
+## 🚀 System Workflow
+1. Initialize all peripherals (motors, line sensors, ultrasonic, IMU, WiFi/MQTT).
+2. Enter main loop:
+   - Read line sensor and compute PID correction.
+   - Adjust motor speeds to maintain line tracking.
+   - Detect and decode barcodes to perform route changes.
+   - Continuously check for obstacles and execute avoidance.
+   - Publish live telemetry (speed, heading, obstacle, barcode) to MQTT.
+3. Repeat until the course is complete.
+
+---
+
+## 📊 MQTT Dashboard Telemetry
+### Displayed Data
+- **Speed & Distance** (from encoders)
+- **Line position & barcode events**
+- **IMU heading / acceleration**
+- **Obstacle detection and path choice**
+- **Recovery & movement state**
+- **Final log summary:** speed, distance, IMU, line events, barcode, obstacle encounters
+
+---
+
+## 🔌 Building & Flashing
 ```bash
-mkdir -p build
-cd build
+mkdir build && cd build
 cmake ..
-cmake --build . -j
-# After build, copy the generated .uf2 to the RPI-RP2 drive while holding BOOTSEL
+make
 ```
+Then copy the generated `.uf2` file to the Pico W (BOOTSEL mode).
 
-### Next Steps
-- If your wiring differs, update the pin macros at the top of `week6demo/other4/src/motor_encoder.c`.
-- Ensure the H-bridge enable/STBY (if present) is asserted.
+---
 
+## 🔑 Usage
+1. Place the robot on a black-line track.
+2. Power it on and ensure it connects to WiFi and the MQTT broker.
+3. Open the dashboard to view real-time telemetry.
+4. Observe live line-following, barcode commands, and obstacle avoidance.
+
+---
+
+## 👥 Contributors
+Developed by **Team 12** for the *Embedded Systems (AY25/26)* course.
+
+---
 

@@ -337,16 +337,41 @@ function connectMQTT() {
 
                 // ------------------ Ultrasonic / Obstacle Detection ------------------
                 case "robot/ultrasonic":
+                    console.log("Ultrasonic data received:", parsedData);
                     if (parsedData.dist_cm !== undefined) {
                         const objDistElement = document.getElementById("obstacleDistance");
-                        if (objDistElement) objDistElement.innerText = parsedData.dist_cm.toFixed(1) + " cm";
+                        if (objDistElement) {
+                            // Show "No obstacle" if distance is invalid (-1 or negative or > 400cm)
+                            if (parsedData.dist_cm < 0 || parsedData.dist_cm > 400) {
+                                objDistElement.innerText = "No obstacle";
+                                objDistElement.style.color = "#6b7280";
+                                console.log("Ultrasonic: No obstacle (distance:", parsedData.dist_cm, ")");
+                            } else {
+                                objDistElement.innerText = parsedData.dist_cm.toFixed(1) + " cm";
+                                objDistElement.style.color = "";
+                                console.log("Ultrasonic: Distance updated to", parsedData.dist_cm.toFixed(1), "cm");
+                            }
+                        } else {
+                            console.error("Ultrasonic: obstacleDistance element not found!");
+                        }
+                    } else {
+                        console.warn("Ultrasonic: dist_cm field missing in data:", parsedData);
                     }
                     break;
                     
                 case "robot/obstacle":
                     if (parsedData.dist_cm !== undefined) {
                         const objDistElement = document.getElementById("obstacleDistance");
-                        if (objDistElement) objDistElement.innerText = parsedData.dist_cm.toFixed(1) + " cm";
+                        if (objDistElement) {
+                            // Show "No obstacle" if distance is invalid (-1 or negative or > 400cm)
+                            if (parsedData.dist_cm < 0 || parsedData.dist_cm > 400) {
+                                objDistElement.innerText = "No obstacle";
+                                objDistElement.style.color = "#6b7280";
+                            } else {
+                                objDistElement.innerText = parsedData.dist_cm.toFixed(1) + " cm";
+                                objDistElement.style.color = "";
+                            }
+                        }
                     }
                     if (parsedData.left_width !== undefined) {
                         const leftWidthElement = document.getElementById("obstacleLeftWidth");

@@ -58,7 +58,7 @@ static void (*mqtt_cmd_callback)(const char *topic, const char *payload, int len
 // ============================================================
 static bool mqtt_publish_in_progress = false;
 static absolute_time_t mqtt_last_publish_time = 0;  // Initialize to 0 (nil_time equivalent)
-static const uint32_t MQTT_MIN_PUBLISH_INTERVAL_MS = 100;  // Minimum 100ms between publishes (reduced from 800ms)
+static const uint32_t MQTT_MIN_PUBLISH_INTERVAL_MS = 100;  // Minimum 100ms between publishes (reduced to allow more throughput)
 static const uint32_t MQTT_PUBLISH_DRAIN_TIMEOUT_MS = 1500; // Max time to wait for queue to drain
 
 // ============================================================
@@ -152,6 +152,12 @@ static bool mqtt_can_publish_now(void) {
     
     // Check if previous publish is still in progress
     if (mqtt_publish_in_progress) {
+        // If enough time has passed since last publish, reset the flag
+        if (time_since_last_publish > (int64_t)(MQTT_MIN_PUBLISH_INTERVAL_MS + 50)) {
+            // Minimum interval has passed, safe to reset and allow next publish
+            mqtt_publish_in_progress = false;
+            return true;
+        }
         // If publish has been in progress for too long, assume it failed or queue is stuck
         if (time_since_last_publish > (int64_t)MQTT_PUBLISH_DRAIN_TIMEOUT_MS) {
             printf("[MQTT] Previous publish timeout - resetting state\n");

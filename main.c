@@ -13,6 +13,7 @@
 #include <line_follow.h>
 #include <barcode.h>
 #include "ultrasonic.h"
+#include "imu_lis3dh.h"
 #include "mqtt_client.h"
 #include "mqtt_config.h"
 
@@ -320,6 +321,7 @@ int main() {
     barcode_init();
     servo_init_hw();
     setupUltrasonicPins(TRIG_PIN, ECHO_PIN);
+    imu_init();
     servo_set_pulse(SERVO_CENTER_PULSE);
 
     // Initialize WiFi with proper reset sequence
@@ -459,7 +461,9 @@ int main() {
     uint64_t now;
     uint32_t last_telemetry = 0;
     uint32_t last_state_publish = 0;
-    uint32_t last_line_sensor_publish = 100;  // Offset by 100ms to avoid simultaneous publish with telemetry
+    uint32_t last_line_sensor_publish = 50;   // Offset by 50ms to stagger publishes
+    uint32_t last_imu_publish = 100;          // Offset by 100ms to stagger publishes
+    uint32_t last_ultrasonic_publish = 150;   // Offset by 150ms to stagger publishes
     uint32_t last_blink = 0;
     absolute_time_t last_connection_check = get_absolute_time();
     float error = 0.0f;
@@ -507,14 +511,34 @@ int main() {
         // -------------------------------------------------------------------
         float dist = get_distance_cm(TRIG_PIN, ECHO_PIN);
         
-        // Publish ultrasonic telemetry
-        if (robot_mqtt_check_connection() && (now_ms % 500 < 50)) {
-            char us_payload[64];
-            snprintf(us_payload, sizeof(us_payload), "{\"dist_cm\":%.1f}", dist);
-            mqtt_publish_message_safe("robot/ultrasonic", us_payload);
+        // Debug: Print sensor reading every second
+        static uint32_t last_debug_print = 0;
+        if (now_ms - last_debug_print > 1000) {
+            printf("[DEBUG] Ultrasonic reading: %.1f cm\n", dist);
+            last_debug_print = now_ms;
         }
         
-        if (line_following_enabled && dist > 0.1f && dist < STOP_DISTANCE_CM) {
+        // Publish ultrasonic telemetry (only when value changes significantly, every 500ms)
+        static float last_published_dist = -999.0f;
+        if (robot_mqtt_check_connection() && (now_ms - last_ultrasonic_publish > 500)) {
+            // Only publish if value changed significantly (>1cm) or if it's the first reading
+            if (fabsf(dist - last_published_dist) > 1.0f || last_published_dist < -900.0f) {
+                char us_payload[64];
+                snprintf(us_payload, sizeof(us_payload), "{\"dist_cm\":%.1f}", dist);
+                if (mqtt_publish_message_safe("robot/ultrasonic", us_payload)) {
+                    printf("[ULTRASONIC] Published: %.1f cm\n", dist);
+                    last_published_dist = dist;
+                    last_ultrasonic_publish = now_ms;  // Only update timestamp on successful publish
+                } else {
+                    printf("[ULTRASONIC] Failed to publish (backpressure or connection issue)\n");
+                }
+            } else {
+                // Value hasn't changed enough, skip this publish cycle
+                last_ultrasonic_publish = now_ms;  // Update timestamp to avoid constant checking
+            }
+        }
+        
+        if (line_following_enabled && dist > 0.1f && dist < STOP_DISTANCE_CM && dist != -1.0f) {
             current_state = STATE_AVOIDING_OBSTACLE;
             printf("Obstacle at %.1f cm! Stopping for width scan.\n", dist);
             motor_set(0, 0);
@@ -868,23 +892,8 @@ int main() {
         calculate_speed_kmh();
         float distance_m = calculate_distance_traveled();
         
-        // Publish system state (every 1 second, separate from telemetry)
-        if (robot_mqtt_check_connection() && (now_ms - last_state_publish > 1000)) {
-            char state_payload[128];
-            const char* state_str = get_state_string(current_state);
-            snprintf(state_payload, sizeof(state_payload),
-                     "{\"state\":\"%s\",\"ts\":%lu}",
-                     state_str, (unsigned long)now_ms);
-            if (mqtt_publish_message_safe("robot/state", state_payload)) {
-                printf("[STATE] Published: %s\n", state_str);
-            } else {
-                printf("[STATE] Failed to publish: %s (backpressure?)\n", state_str);
-            }
-            last_state_publish = now_ms;
-        }
-        
-        // Publish main telemetry with all data (every 200ms for real-time updates)
-        if (robot_mqtt_check_connection() && (now_ms - last_telemetry > 200)) {
+        // Publish main telemetry with all data (every 300ms)
+        if (robot_mqtt_check_connection() && (now_ms - last_telemetry > 300)) {
             uint32_t enc1 = encoder_pulse_width_us(1);
             uint32_t enc2 = encoder_pulse_width_us(2);
             char telemetry_payload[256];
@@ -894,12 +903,34 @@ int main() {
                      speed_kmh_avg, speed_kmh_left, speed_kmh_right, distance_m,
                      (unsigned long)now_ms);
             mqtt_publish_message_safe(MQTT_TOPIC_TELEMETRY, telemetry_payload);
-            last_telemetry = now_ms;
+            last_telemetry = now_ms;  // Update timestamp regardless to prevent blocking
         }
         
-        // Publish line sensor data separately (every 200ms, offset from telemetry to avoid backpressure)
+        // Read and publish IMU data (every 500ms)
+        if (robot_mqtt_check_connection() && (now_ms - last_imu_publish > 500)) {
+            imu_state_t imu;
+            bool imu_ok = imu_read(&imu);
+            
+            if (imu_ok) {
+                char imu_payload[256];
+                snprintf(imu_payload, sizeof(imu_payload),
+                         "{\"ax\":%.3f,\"ay\":%.3f,\"az\":%.3f,\"heading_raw\":%.2f,\"heading_filtered\":%.2f,\"distance_m\":%.3f,\"correction\":%.3f,\"ts\":%lu}",
+                         imu.ax, imu.ay, imu.az,
+                         imu.heading, imu.heading,  // Using same value for raw and filtered
+                         distance_m, 0.0f,  // distance_m already calculated, correction=0 for now
+                         (unsigned long)now_ms);
+                
+                if (mqtt_publish_message_safe(MQTT_TOPIC_IMU, imu_payload)) {
+                    printf("[IMU] Published: ax=%.3f, ay=%.3f, az=%.3f, heading=%.2f\n", 
+                           imu.ax, imu.ay, imu.az, imu.heading);
+                }
+                last_imu_publish = now_ms;  // Update timestamp regardless to prevent blocking
+            }
+        }
+        
+        // Publish line sensor data separately (every 400ms)
         // This allows dashboard to see sensor readings even in manual mode
-        if (robot_mqtt_check_connection() && (now_ms - last_line_sensor_publish > 200)) {
+        if (robot_mqtt_check_connection() && (now_ms - last_line_sensor_publish > 400)) {
             // Read fresh line sensor data right before publishing
             line_sample_t ls_fresh;
             lf_read(&ls_fresh);
@@ -911,7 +942,22 @@ int main() {
                 printf("[LINE] Published: ADC=%u, on_line=%d, error=%.3f, correction=%.3f\n",
                        ls_fresh.adc_right, ls_fresh.right_on_line ? 1 : 0, error, correction);
             }
-            last_line_sensor_publish = now_ms;
+            last_line_sensor_publish = now_ms;  // Update timestamp regardless to prevent blocking
+        }
+        
+        // Publish system state (every 1.5 seconds - less frequent to reduce backpressure)
+        if (robot_mqtt_check_connection() && (now_ms - last_state_publish > 1500)) {
+            char state_payload[128];
+            const char* state_str = get_state_string(current_state);
+            snprintf(state_payload, sizeof(state_payload),
+                     "{\"state\":\"%s\",\"ts\":%lu}",
+                     state_str, (unsigned long)now_ms);
+            if (mqtt_publish_message_safe("robot/state", state_payload)) {
+                printf("[STATE] Published: %s\n", state_str);
+                last_state_publish = now_ms;  // Only update timestamp on successful publish
+            } else {
+                printf("[STATE] Failed to publish: %s (backpressure?)\n", state_str);
+            }
         }
 
         sleep_ms(60);

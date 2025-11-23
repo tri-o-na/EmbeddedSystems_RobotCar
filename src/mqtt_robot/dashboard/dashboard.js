@@ -380,17 +380,25 @@ function connectMQTT() {
                     
                 // ------------------ System State ------------------
                 case "robot/state":
-                    if (parsedData.state !== undefined) {
+                    console.log("System state received:", parsedData);
+                    if (parsedData.state !== undefined && parsedData.state !== null) {
                         const stateElement = document.getElementById("systemState");
                         if (stateElement) {
                             stateElement.innerText = parsedData.state;
+                            console.log("Updated system state to:", parsedData.state);
+                            
                             // Update mode status in line following panel
                             const modeStatusElement = document.getElementById("modeStatus");
                             if (modeStatusElement) {
                                 modeStatusElement.textContent = "Mode: " + parsedData.state;
                             }
+                        } else {
+                            console.error("systemState element not found in DOM!");
                         }
+                    } else {
+                        console.warn("System state data missing 'state' field:", parsedData);
                     }
+                    updateLastUpdateTime();
                     break;
                     
                 // ------------------ IMU Data ------------------
@@ -434,6 +442,16 @@ function connectMQTT() {
                             lineEventElement.innerText = eventText;
                             lineEventElement.style.color = parsedData.event === "ON_LINE" ? "#10b981" : "#ef4444";
                         }
+                        
+                        // Display ADC value (1 for on line, 0 for off line)
+                        if (parsedData.adc !== undefined) {
+                            const lineEventADCElement = document.getElementById("lineEventADC");
+                            if (lineEventADCElement) {
+                                lineEventADCElement.innerText = parsedData.adc;
+                                lineEventADCElement.style.color = parsedData.adc === 1 ? "#10b981" : "#ef4444";
+                            }
+                        }
+                        
                         // Add timestamp (handle both milliseconds and seconds)
                         if (parsedData.ts !== undefined) {
                             const lineEventTimeElement = document.getElementById("lineEventTime");

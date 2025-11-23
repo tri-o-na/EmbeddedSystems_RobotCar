@@ -735,8 +735,10 @@ int main() {
             if (robot_mqtt_check_connection() && (now_ms - last_line_event_time > 100)) {
                 char line_event_payload[128];
                 snprintf(line_event_payload, sizeof(line_event_payload),
-                         "{\"event\":\"%s\",\"ts\":%lu}",
-                         ls.right_on_line ? "ON_LINE" : "OFF_LINE", (unsigned long)now_ms);
+                         "{\"event\":\"%s\",\"adc\":%d,\"ts\":%lu}",
+                         ls.right_on_line ? "ON_LINE" : "OFF_LINE", 
+                         ls.right_on_line ? 1 : 0, 
+                         (unsigned long)now_ms);
                 mqtt_publish_message_safe("robot/line_events", line_event_payload);
                 last_line_event_time = now_ms;
             }
@@ -869,10 +871,15 @@ int main() {
         // Publish system state (every 1 second, separate from telemetry)
         if (robot_mqtt_check_connection() && (now_ms - last_state_publish > 1000)) {
             char state_payload[128];
+            const char* state_str = get_state_string(current_state);
             snprintf(state_payload, sizeof(state_payload),
                      "{\"state\":\"%s\",\"ts\":%lu}",
-                     get_state_string(current_state), (unsigned long)now_ms);
-            mqtt_publish_message_safe("robot/state", state_payload);
+                     state_str, (unsigned long)now_ms);
+            if (mqtt_publish_message_safe("robot/state", state_payload)) {
+                printf("[STATE] Published: %s\n", state_str);
+            } else {
+                printf("[STATE] Failed to publish: %s (backpressure?)\n", state_str);
+            }
             last_state_publish = now_ms;
         }
         

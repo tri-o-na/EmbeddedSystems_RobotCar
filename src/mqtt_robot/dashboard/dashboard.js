@@ -77,6 +77,46 @@ function connectMQTT() {
                 }
             });
             
+            brokerConnection.subscribe("robot/ultrasonic", (err) => {
+                if (err) {
+                    console.error("Subscription error:", err);
+                } else {
+                    console.log("✓ Subscribed to robot/ultrasonic");
+                }
+            });
+            
+            brokerConnection.subscribe("robot/imu", (err) => {
+                if (err) {
+                    console.error("Subscription error:", err);
+                } else {
+                    console.log("✓ Subscribed to robot/imu");
+                }
+            });
+            
+            brokerConnection.subscribe("robot/state", (err) => {
+                if (err) {
+                    console.error("Subscription error:", err);
+                } else {
+                    console.log("✓ Subscribed to robot/state");
+                }
+            });
+            
+            brokerConnection.subscribe("robot/obstacle", (err) => {
+                if (err) {
+                    console.error("Subscription error:", err);
+                } else {
+                    console.log("✓ Subscribed to robot/obstacle");
+                }
+            });
+            
+            brokerConnection.subscribe("robot/line_events", (err) => {
+                if (err) {
+                    console.error("Subscription error:", err);
+                } else {
+                    console.log("✓ Subscribed to robot/line_events");
+                }
+            });
+            
             showCommandStatus("Connected and subscribed!", "success");
             setTimeout(() => {
                 document.getElementById('commandStatus').textContent = '';
@@ -148,6 +188,11 @@ function connectMQTT() {
                     if (parsedData.speed_right !== undefined) {
                         const speedRightElement = document.getElementById("speedRight");
                         if (speedRightElement) speedRightElement.innerText = parsedData.speed_right.toFixed(2);
+                    }
+                    // Update distance traveled
+                    if (parsedData.distance_m !== undefined) {
+                        const distanceElement = document.getElementById("distanceTraveled");
+                        if (distanceElement) distanceElement.innerText = parsedData.distance_m.toFixed(3);
                     }
                     console.log("Robot telemetry:", parsedData);
                     updateLastUpdateTime();
@@ -268,27 +313,113 @@ function connectMQTT() {
                     }
                     break;
 
-                // ------------------ Obstacle Detection ------------------
-                case "telemetry/obstacle":
-                    if (parsedData.distance !== undefined) {
-                        const objDistElement = document.getElementById("objdistValue");
-                        if (objDistElement) objDistElement.innerText = parsedData.distance.toFixed(2);
+                // ------------------ Ultrasonic / Obstacle Detection ------------------
+                case "robot/ultrasonic":
+                    if (parsedData.dist_cm !== undefined) {
+                        const objDistElement = document.getElementById("obstacleDistance");
+                        if (objDistElement) objDistElement.innerText = parsedData.dist_cm.toFixed(1) + " cm";
                     }
-                    if (parsedData.clearance !== undefined) {
-                        const clearElement = document.getElementById("clearValue");
-                        if (clearElement) clearElement.innerText = parsedData.clearance;
+                    break;
+                    
+                case "robot/obstacle":
+                    if (parsedData.dist_cm !== undefined) {
+                        const objDistElement = document.getElementById("obstacleDistance");
+                        if (objDistElement) objDistElement.innerText = parsedData.dist_cm.toFixed(1) + " cm";
+                    }
+                    if (parsedData.left_width !== undefined) {
+                        const leftWidthElement = document.getElementById("obstacleLeftWidth");
+                        if (leftWidthElement) leftWidthElement.innerText = parsedData.left_width.toFixed(1) + " cm";
+                    }
+                    if (parsedData.right_width !== undefined) {
+                        const rightWidthElement = document.getElementById("obstacleRightWidth");
+                        if (rightWidthElement) rightWidthElement.innerText = parsedData.right_width.toFixed(1) + " cm";
+                    }
+                    if (parsedData.chosen_path !== undefined) {
+                        const chosenPathElement = document.getElementById("obstacleChosenPath");
+                        if (chosenPathElement) chosenPathElement.innerText = parsedData.chosen_path;
                     }
                     if (parsedData.recovery_status !== undefined) {
-                        const recovStatusElement = document.getElementById("recovstatusValue");
-                        if (recovStatusElement) recovStatusElement.innerText = parsedData.recovery_status;
+                        const recovStatusElement = document.getElementById("obstacleRecoveryStatus");
+                        if (recovStatusElement) {
+                            recovStatusElement.innerText = parsedData.recovery_status;
+                            // Color code recovery status
+                            if (parsedData.recovery_status === "REJOINED") {
+                                recovStatusElement.style.color = "#10b981";
+                            } else if (parsedData.recovery_status === "FAILED") {
+                                recovStatusElement.style.color = "#ef4444";
+                            } else {
+                                recovStatusElement.style.color = "#f59e0b";
+                            }
+                        }
+                        // Add to obstacle log
+                        addObstacleLog(parsedData);
                     }
-                    if (parsedData.obstacle_width !== undefined) {
-                        const obstacleWidthElement = document.getElementById("ObstaclewidthValue");
-                        if (obstacleWidthElement) obstacleWidthElement.innerText = parsedData.obstacle_width;
+                    break;
+                    
+                // ------------------ System State ------------------
+                case "robot/state":
+                    if (parsedData.state !== undefined) {
+                        const stateElement = document.getElementById("systemState");
+                        if (stateElement) {
+                            stateElement.innerText = parsedData.state;
+                            // Update mode status in line following panel
+                            const modeStatusElement = document.getElementById("modeStatus");
+                            if (modeStatusElement) {
+                                modeStatusElement.textContent = "Mode: " + parsedData.state;
+                            }
+                        }
                     }
-                    if (parsedData.line_event !== undefined) {
-                        const lineEventElement = document.getElementById("lineEventValue");
-                        if (lineEventElement) lineEventElement.innerText = parsedData.line_event;
+                    break;
+                    
+                // ------------------ IMU Data ------------------
+                case "robot/imu":
+                    if (parsedData.heading_raw !== undefined) {
+                        const headingRawElement = document.getElementById("headingRaw");
+                        if (headingRawElement) headingRawElement.innerText = parsedData.heading_raw.toFixed(1);
+                    }
+                    if (parsedData.heading_filtered !== undefined) {
+                        const headingFilteredElement = document.getElementById("headingFiltered");
+                        if (headingFilteredElement) headingFilteredElement.innerText = parsedData.heading_filtered.toFixed(1);
+                    }
+                    if (parsedData.distance_m !== undefined) {
+                        const distanceElement = document.getElementById("distanceTraveled");
+                        if (distanceElement) distanceElement.innerText = parsedData.distance_m.toFixed(3);
+                    }
+                    if (parsedData.correction !== undefined) {
+                        const imuCorrectionElement = document.getElementById("imuCorrection");
+                        if (imuCorrectionElement) imuCorrectionElement.innerText = parsedData.correction.toFixed(3);
+                    }
+                    if (parsedData.ax !== undefined) {
+                        const accelXElement = document.getElementById("accelX");
+                        if (accelXElement) accelXElement.innerText = parsedData.ax.toFixed(3);
+                    }
+                    if (parsedData.ay !== undefined) {
+                        const accelYElement = document.getElementById("accelY");
+                        if (accelYElement) accelYElement.innerText = parsedData.ay.toFixed(3);
+                    }
+                    if (parsedData.az !== undefined) {
+                        const accelZElement = document.getElementById("accelZ");
+                        if (accelZElement) accelZElement.innerText = parsedData.az.toFixed(3);
+                    }
+                    break;
+                    
+                // ------------------ Line Events ------------------
+                case "robot/line_events":
+                    if (parsedData.event !== undefined) {
+                        const lineEventElement = document.getElementById("lineEventDisplay");
+                        if (lineEventElement) {
+                            const eventText = parsedData.event === "ON_LINE" ? "ON LINE" : "OFF LINE";
+                            lineEventElement.innerText = eventText;
+                            lineEventElement.style.color = parsedData.event === "ON_LINE" ? "#10b981" : "#ef4444";
+                        }
+                        // Add timestamp
+                        if (parsedData.ts !== undefined) {
+                            const lineEventTimeElement = document.getElementById("lineEventTime");
+                            if (lineEventTimeElement) {
+                                const date = new Date(parsedData.ts);
+                                lineEventTimeElement.innerText = date.toLocaleTimeString();
+                            }
+                        }
                     }
                     break;
 
@@ -661,5 +792,49 @@ function disableBarcode() {
             document.getElementById('barcodeLength').textContent = "0";
         }
     });
+}
+
+// Add obstacle encounter to log
+function addObstacleLog(data) {
+    const logContainer = document.getElementById('obstacleLogContainer');
+    if (!logContainer) return;
+    
+    const logEntry = document.createElement('div');
+    logEntry.className = 'obstacle-log-entry';
+    
+    const timestamp = data.ts ? new Date(data.ts).toLocaleTimeString() : new Date().toLocaleTimeString();
+    let logText = `[${timestamp}] `;
+    
+    if (data.dist_cm !== undefined) {
+        logText += `Distance: ${data.dist_cm.toFixed(1)}cm `;
+    }
+    if (data.left_width !== undefined && data.right_width !== undefined) {
+        logText += `Widths: L=${data.left_width.toFixed(1)}cm R=${data.right_width.toFixed(1)}cm `;
+    }
+    if (data.chosen_path) {
+        logText += `Path: ${data.chosen_path} `;
+    }
+    if (data.recovery_status) {
+        logText += `Status: ${data.recovery_status}`;
+    }
+    
+    logEntry.textContent = logText;
+    
+    // Color code by recovery status
+    if (data.recovery_status === "REJOINED") {
+        logEntry.style.color = "#10b981";
+    } else if (data.recovery_status === "FAILED") {
+        logEntry.style.color = "#ef4444";
+    } else {
+        logEntry.style.color = "#f59e0b";
+    }
+    
+    // Add to top of log
+    logContainer.insertBefore(logEntry, logContainer.firstChild);
+    
+    // Keep only last 10 entries
+    while (logContainer.children.length > 10) {
+        logContainer.removeChild(logContainer.lastChild);
+    }
 }
 

@@ -62,6 +62,46 @@ extern bool mqtt_publish_message_safe(const char *topic, const char *payload);
 extern char decoded_message[];
 extern int message_length;
 
+// System state tracking
+typedef enum {
+    STATE_IDLE,
+    STATE_LINE_FOLLOWING,
+    STATE_TURNING_LEFT,
+    STATE_TURNING_RIGHT,
+    STATE_AVOIDING_OBSTACLE,
+    STATE_SCANNING,
+    STATE_RECOVERING,
+    STATE_MANUAL
+} system_state_t;
+
+static system_state_t current_state = STATE_IDLE;
+static bool line_following_enabled = true;  // Default to line following
+static bool manual_mode = false;
+static float current_m1 = 0.0f;
+static float current_m2 = 0.0f;
+
+// Distance traveled tracking
+static uint32_t initial_encoder_left = 0;
+static uint32_t initial_encoder_right = 0;
+static bool distance_tracking_initialized = false;
+
+// Line event tracking
+static bool last_line_state = false;
+static uint32_t last_line_event_time = 0;
+
+// Obstacle encounter logging
+#define MAX_OBSTACLE_LOGS 10
+typedef struct {
+    float distance_cm;
+    float left_width;
+    float right_width;
+    char chosen_path[8];
+    char recovery_status[16];
+    uint32_t timestamp;
+} obstacle_log_t;
+static obstacle_log_t obstacle_logs[MAX_OBSTACLE_LOGS];
+static int obstacle_log_count = 0;
+
 // Speed calculation constants
 #define WHEEL_DIAMETER_MM 65.0f
 #define ENCODER_TICKS_PER_REV 20.0f
@@ -104,6 +144,120 @@ static float clampf(float v, float lo, float hi)
     if (v < lo) return lo;
     if (v > hi) return hi;
     return v;
+}
+
+// Get system state string
+static const char* get_state_string(system_state_t state) {
+    switch(state) {
+        case STATE_IDLE: return "IDLE";
+        case STATE_LINE_FOLLOWING: return "Following line";
+        case STATE_TURNING_LEFT: return "Turning left";
+        case STATE_TURNING_RIGHT: return "Turning right";
+        case STATE_AVOIDING_OBSTACLE: return "Avoiding obstacle";
+        case STATE_SCANNING: return "Scanning";
+        case STATE_RECOVERING: return "Recovering";
+        case STATE_MANUAL: return "Manual";
+        default: return "UNKNOWN";
+    }
+}
+
+// Calculate distance traveled in meters
+static float calculate_distance_traveled(void) {
+    if (!distance_tracking_initialized) {
+        initial_encoder_left = encoder_get_count(1);
+        initial_encoder_right = encoder_get_count(2);
+        distance_tracking_initialized = true;
+        return 0.0f;
+    }
+    
+    uint32_t enc_left = encoder_get_count(1);
+    uint32_t enc_right = encoder_get_count(2);
+    
+    uint32_t delta_left = enc_left - initial_encoder_left;
+    uint32_t delta_right = enc_right - initial_encoder_right;
+    uint32_t avg_ticks = (delta_left + delta_right) / 2;
+    
+    return (avg_ticks / ENCODER_TICKS_PER_REV) * WHEEL_CIRCUMFERENCE_M;
+}
+
+// Command handler - processes incoming MQTT commands
+void process_robot_commands(const char *topic, const char *payload, int len) {
+    printf("MQTT Command received on topic '%s': %.*s\n", topic, len, payload);
+    
+    // Check for mode commands first
+    if (strstr(payload, "\"mode\"") != NULL) {
+        if (strstr(payload, "\"line_follow\"") != NULL || strstr(payload, "\"line_following\"") != NULL) {
+            line_following_enabled = true;
+            manual_mode = false;
+            current_state = STATE_LINE_FOLLOWING;
+            printf("  Line following mode ENABLED\n");
+        } else if (strstr(payload, "\"manual\"") != NULL) {
+            line_following_enabled = false;
+            manual_mode = true;
+            current_state = STATE_MANUAL;
+            printf("  Manual control mode ENABLED\n");
+            motor_set(0, 0);
+            current_m1 = 0.0f;
+            current_m2 = 0.0f;
+        }
+        if (strstr(payload, "\"barcode\"") != NULL) {
+            // Barcode enable/disable handled in barcode module
+            printf("  Barcode command received\n");
+        }
+        return; // Don't process motor commands when changing mode
+    }
+    
+    // Emergency stop ALWAYS works, regardless of mode
+    if (strstr(payload, "\"action\"") != NULL && strstr(payload, "stop") != NULL) {
+        printf("  Emergency stop command received\n");
+        line_following_enabled = false;
+        manual_mode = true;
+        current_state = STATE_IDLE;
+        motor_set(0, 0);
+        current_m1 = 0.0f;
+        current_m2 = 0.0f;
+        printf("  Motors stopped\n");
+        return;
+    }
+    
+    // Only process motor commands if in manual mode
+    if (manual_mode) {
+        // Parse JSON and call motor_set() with received values
+        if (strstr(payload, "\"m1\"") != NULL || strstr(payload, "\"m2\"") != NULL) {
+            // Extract motor values
+            float m1 = 0.0f, m2 = 0.0f;
+            char *m1_pos = strstr(payload, "\"m1\"");
+            char *m2_pos = strstr(payload, "\"m2\"");
+            
+            if (m1_pos) {
+                m1_pos = strchr(m1_pos, ':');
+                if (m1_pos) {
+                    m1 = strtof(m1_pos + 1, NULL);
+                }
+            }
+            if (m2_pos) {
+                m2_pos = strchr(m2_pos, ':');
+                if (m2_pos) {
+                    m2 = strtof(m2_pos + 1, NULL);
+                }
+            }
+            
+            // Clamp values to safe range
+            if (m1 > 1.0f) m1 = 1.0f;
+            if (m1 < -1.0f) m1 = -1.0f;
+            if (m2 > 1.0f) m2 = 1.0f;
+            if (m2 < -1.0f) m2 = -1.0f;
+            
+            printf("  Parsed command: m1=%.2f, m2=%.2f\n", m1, m2);
+            
+            // Actually control the motors!
+            motor_set(m2, m1);  // Note: motor_set takes (right, left)
+            current_m1 = m1;
+            current_m2 = m2;
+            
+            printf("  Motors set: m1=%.2f, m2=%.2f\n", m1, m2);
+        }
+    }
 }
 
 // ---- Motor Calibration Bias ----
@@ -263,9 +417,15 @@ int main() {
     
     // Initialize MQTT
     printf("Connecting to MQTT broker %s:%d...\n", MQTT_BROKER_IP, MQTT_BROKER_PORT);
+    robot_set_command_handler(process_robot_commands);
     robot_mqtt_init_and_connect(MQTT_BROKER_IP, MQTT_BROKER_PORT);
     sleep_ms(2000);
     printf("MQTT ready!\n");
+    
+    // Initialize state
+    current_state = STATE_LINE_FOLLOWING;
+    line_following_enabled = true;
+    manual_mode = false;
 
     // Base speed maintained at 0.20f for reliable barcode detection
     const float base_speed = 0.15f; 
@@ -282,6 +442,8 @@ int main() {
     uint32_t last_telemetry = 0;
     uint32_t last_blink = 0;
     absolute_time_t last_connection_check = get_absolute_time();
+    float error = 0.0f;
+    float correction = 0.0f;
 
     printf("Starting control loop...\n");
 
@@ -332,10 +494,21 @@ int main() {
             mqtt_publish_message_safe("robot/ultrasonic", us_payload);
         }
         
-        if (dist > 0.1f && dist < STOP_DISTANCE_CM) {
+        if (line_following_enabled && dist > 0.1f && dist < STOP_DISTANCE_CM) {
+            current_state = STATE_AVOIDING_OBSTACLE;
             printf("Obstacle at %.1f cm! Stopping for width scan.\n", dist);
             motor_set(0, 0);
             sleep_ms(500);
+            
+            // Publish obstacle detection
+            current_state = STATE_SCANNING;
+            if (robot_mqtt_check_connection()) {
+                char obstacle_payload[128];
+                snprintf(obstacle_payload, sizeof(obstacle_payload),
+                         "{\"dist_cm\":%.1f,\"recovery_status\":\"SCANNING\",\"ts\":%lu}",
+                         dist, (unsigned long)now_ms);
+                mqtt_publish_message_safe("robot/obstacle", obstacle_payload);
+            }
 
             int scan_delta = (int)(SERVO_SCAN_DEGREES * SERVO_US_PER_DEG); 
             
@@ -393,9 +566,37 @@ int main() {
 
             printf("Widths (Corrected) -> L: %.1f cm, R: %.1f cm. Total: %.1f cm\n", left_obs_width, right_obs_width, left_obs_width + right_obs_width);
 
+            // Publish obstacle details
+            const char* chosen_path;
+            if (left_obs_width < right_obs_width) {
+                chosen_path = "LEFT";
+            } else {
+                chosen_path = "RIGHT";
+            }
+            
+            if (robot_mqtt_check_connection()) {
+                char obstacle_payload[256];
+                snprintf(obstacle_payload, sizeof(obstacle_payload),
+                         "{\"dist_cm\":%.1f,\"left_width\":%.1f,\"right_width\":%.1f,\"chosen_path\":\"%s\",\"recovery_status\":\"TURNING\",\"ts\":%lu}",
+                         min_dist_seen, left_obs_width, right_obs_width, chosen_path, (unsigned long)now_ms);
+                mqtt_publish_message_safe("robot/obstacle", obstacle_payload);
+                
+                // Log obstacle encounter
+                if (obstacle_log_count < MAX_OBSTACLE_LOGS) {
+                    obstacle_logs[obstacle_log_count].distance_cm = min_dist_seen;
+                    obstacle_logs[obstacle_log_count].left_width = left_obs_width;
+                    obstacle_logs[obstacle_log_count].right_width = right_obs_width;
+                    strncpy(obstacle_logs[obstacle_log_count].chosen_path, chosen_path, 7);
+                    strncpy(obstacle_logs[obstacle_log_count].recovery_status, "TURNING", 15);
+                    obstacle_logs[obstacle_log_count].timestamp = now_ms;
+                    obstacle_log_count++;
+                }
+            }
+
             // 3. Decision: Go with left/right with lesser cm (lesser width)
             if (left_obs_width < right_obs_width) {
                 printf("Turning LEFT (Lesser width)\n");
+                current_state = STATE_TURNING_LEFT;
                 
                 motor_set(0.35f, -0.35f); 
                 sleep_ms(300); 
@@ -408,22 +609,47 @@ int main() {
                 sleep_ms(600);
 
                 printf("Moving forward to find line...\n");
-                motor_set(0.20f, 0.20f); 
+                motor_set(0.20f, 0.20f);
+                current_state = STATE_RECOVERING;
+                
+                if (robot_mqtt_check_connection()) {
+                    char obstacle_payload[128];
+                    snprintf(obstacle_payload, sizeof(obstacle_payload),
+                             "{\"recovery_status\":\"SEARCHING\",\"ts\":%lu}",
+                             (unsigned long)now_ms);
+                    mqtt_publish_message_safe("robot/obstacle", obstacle_payload);
+                }
                 
                 uint64_t search_start = time_us_64();
+                bool line_found = false;
                 while (true) {
                     line_sample_t ls_check;
                     lf_read(&ls_check);
                     if (ls_check.right_on_line) {
                         printf("Line found!\n");
+                        line_found = true;
                         break;
                     }
                     if (time_us_64() - search_start > 5000000) break;
                     sleep_ms(10);
                 }
+                
+                if (robot_mqtt_check_connection()) {
+                    char obstacle_payload[128];
+                    snprintf(obstacle_payload, sizeof(obstacle_payload),
+                             "{\"recovery_status\":\"%s\",\"ts\":%lu}",
+                             line_found ? "REJOINED" : "FAILED", (unsigned long)now_ms);
+                    mqtt_publish_message_safe("robot/obstacle", obstacle_payload);
+                    
+                    if (obstacle_log_count > 0) {
+                        strncpy(obstacle_logs[obstacle_log_count-1].recovery_status,
+                               line_found ? "REJOINED" : "FAILED", 15);
+                    }
+                }
 
             } else {
                 printf("Turning RIGHT (Lesser width)\n");
+                current_state = STATE_TURNING_RIGHT;
                 
                 motor_set(-0.35f, 0.35f); 
                 sleep_ms(300); 
@@ -436,103 +662,162 @@ int main() {
                 sleep_ms(600);
 
                 printf("Moving forward to find line...\n");
-                motor_set(0.20f, 0.20f); 
+                motor_set(0.20f, 0.20f);
+                current_state = STATE_RECOVERING;
+                
+                if (robot_mqtt_check_connection()) {
+                    char obstacle_payload[128];
+                    snprintf(obstacle_payload, sizeof(obstacle_payload),
+                             "{\"recovery_status\":\"SEARCHING\",\"ts\":%lu}",
+                             (unsigned long)now_ms);
+                    mqtt_publish_message_safe("robot/obstacle", obstacle_payload);
+                }
                 
                 uint64_t search_start = time_us_64();
+                bool line_found = false;
                 while (true) {
                     line_sample_t ls_check;
                     lf_read(&ls_check);
                     if (ls_check.right_on_line) {
                         printf("Line found!\n");
+                        line_found = true;
                         break;
                     }
                     if (time_us_64() - search_start > 5000000) break;
                     sleep_ms(10);
                 }
+                
+                if (robot_mqtt_check_connection()) {
+                    char obstacle_payload[128];
+                    snprintf(obstacle_payload, sizeof(obstacle_payload),
+                             "{\"recovery_status\":\"%s\",\"ts\":%lu}",
+                             line_found ? "REJOINED" : "FAILED", (unsigned long)now_ms);
+                    mqtt_publish_message_safe("robot/obstacle", obstacle_payload);
+                    
+                    if (obstacle_log_count > 0) {
+                        strncpy(obstacle_logs[obstacle_log_count-1].recovery_status,
+                               line_found ? "REJOINED" : "FAILED", 15);
+                    }
+                }
             }
             
             motor_set(0,0);
             sleep_ms(200);
+            current_state = STATE_LINE_FOLLOWING;
             continue; 
         }
 
         // -------------------------------------------------------------------
         // 1. PID LINE FOLLOWING
         // -------------------------------------------------------------------
-        float sensor_val = ls.right_on_line ? 1.0f : 0.0f;
-        float error      = linePID.setpoint - sensor_val;
-        float correction = pid_update(&linePID, error);
+        if (line_following_enabled) {
+            current_state = STATE_LINE_FOLLOWING;
+            float sensor_val = ls.right_on_line ? 1.0f : 0.0f;
+            error      = linePID.setpoint - sensor_val;
+            correction = pid_update(&linePID, error);
 
-        float min_drive = 0.20f;
+            float min_drive = 0.20f;
 
-        if (ls.right_on_line) {
-            left_speed  = base_speed - correction + CALIBRATION_BIAS;
-            right_speed = base_speed + correction;
+            // Track line events (on/off transitions)
+            if (ls.right_on_line != last_line_state) {
+                last_line_state = ls.right_on_line;
+                if (robot_mqtt_check_connection() && (now_ms - last_line_event_time > 100)) {
+                    char line_event_payload[128];
+                    snprintf(line_event_payload, sizeof(line_event_payload),
+                             "{\"event\":\"%s\",\"ts\":%lu}",
+                             ls.right_on_line ? "ON_LINE" : "OFF_LINE", (unsigned long)now_ms);
+                    mqtt_publish_message_safe("robot/line_events", line_event_payload);
+                    last_line_event_time = now_ms;
+                }
+            }
 
-            last_seen_black_time = now;
+            if (ls.right_on_line) {
+                left_speed  = base_speed - correction + CALIBRATION_BIAS;
+                right_speed = base_speed + correction;
 
-            if (correction > 0.01f)
-                last_turn_dir = +1;
-            else if (correction < -0.01f)
-                last_turn_dir = -1;
-        } 
-        else {
-            uint64_t lost_duration = now - last_seen_black_time;
+                last_seen_black_time = now;
 
-            if (lost_duration < 300000) {
-                if (last_turn_dir == -1) {
-                    left_speed  = base_speed * 1.0f;
-                    right_speed = base_speed * 0.5f;
-                } else { 
-                    left_speed  = base_speed * 0.25f;
-                    right_speed = base_speed * 1.1f;
+                if (correction > 0.01f) {
+                    last_turn_dir = +1;
+                    current_state = STATE_TURNING_RIGHT;
+                } else if (correction < -0.01f) {
+                    last_turn_dir = -1;
+                    current_state = STATE_TURNING_LEFT;
+                } else {
+                    current_state = STATE_LINE_FOLLOWING;
                 }
             } 
             else {
-                printf("Line lost — probing both sides...\n");
-                bool found = false;
+                uint64_t lost_duration = now - last_seen_black_time;
+                current_state = STATE_RECOVERING;
 
-                for (int i = 0; i < 15; i++) {
-                    motor_set(0.30f, -0.30f);
-                    sleep_ms(25);
-                    lf_read(&ls);
-                    if (ls.right_on_line) { found = true; break; }
-                }
+                if (lost_duration < 300000) {
+                    if (last_turn_dir == -1) {
+                        left_speed  = base_speed * 1.0f;
+                        right_speed = base_speed * 0.5f;
+                        current_state = STATE_TURNING_LEFT;
+                    } else { 
+                        left_speed  = base_speed * 0.25f;
+                        right_speed = base_speed * 1.1f;
+                        current_state = STATE_TURNING_RIGHT;
+                    }
+                } 
+                else {
+                    printf("Line lost — probing both sides...\n");
+                    bool found = false;
 
-                if (!found) {
-                    for (int i = 0; i < 25; i++) {
-                        motor_set(-0.30f, 0.30f);
+                    for (int i = 0; i < 15; i++) {
+                        motor_set(0.30f, -0.30f);
                         sleep_ms(25);
                         lf_read(&ls);
                         if (ls.right_on_line) { found = true; break; }
                     }
-                }
 
-                motor_set(0, 0);
-                if (found) {
-                    printf("Reacquired black line! Resuming PID.\n");
-                } else {
-                    printf("Still lost — reversing briefly...\n");
-                    motor_set(-0.25f, -0.25f);
-                    sleep_ms(200);
-                }
+                    if (!found) {
+                        for (int i = 0; i < 25; i++) {
+                            motor_set(-0.30f, 0.30f);
+                            sleep_ms(25);
+                            lf_read(&ls);
+                            if (ls.right_on_line) { found = true; break; }
+                        }
+                    }
 
-                left_speed  = 0.0f;
-                right_speed = 0.0f;
+                    motor_set(0, 0);
+                    if (found) {
+                        printf("Reacquired black line! Resuming PID.\n");
+                        current_state = STATE_LINE_FOLLOWING;
+                    } else {
+                        printf("Still lost — reversing briefly...\n");
+                        motor_set(-0.25f, -0.25f);
+                        sleep_ms(200);
+                    }
+
+                    left_speed  = 0.0f;
+                    right_speed = 0.0f;
+                }
             }
-        }
 
-        // -------------------------------------------------------------------
-        // 2. APPLY MOTOR SPEEDS
-        // -------------------------------------------------------------------
-        if (left_speed != 0.0f || right_speed != 0.0f) {
-            if (left_speed > 0 && left_speed < min_drive) left_speed = min_drive;
-            if (right_speed > 0 && right_speed < min_drive) right_speed = min_drive;
-            
-            left_speed  = clampf(left_speed,  -1.0f, 1.0f);
-            right_speed = clampf(right_speed, -1.0f, 1.0f);
-            
-            motor_set(right_speed, left_speed);
+            // -------------------------------------------------------------------
+            // 2. APPLY MOTOR SPEEDS
+            // -------------------------------------------------------------------
+            if (left_speed != 0.0f || right_speed != 0.0f) {
+                if (left_speed > 0 && left_speed < min_drive) left_speed = min_drive;
+                if (right_speed > 0 && right_speed < min_drive) right_speed = min_drive;
+                
+                left_speed  = clampf(left_speed,  -1.0f, 1.0f);
+                right_speed = clampf(right_speed, -1.0f, 1.0f);
+                
+                motor_set(right_speed, left_speed);
+                current_m1 = left_speed;
+                current_m2 = right_speed;
+            } else {
+                current_m1 = 0.0f;
+                current_m2 = 0.0f;
+            }
+        } else {
+            // Manual mode or idle
+            current_m1 = 0.0f;
+            current_m2 = 0.0f;
         }
 
         // -------------------------------------------------------------------
@@ -554,21 +839,35 @@ int main() {
 
         // Calculate and publish telemetry
         calculate_speed_kmh();
+        float distance_m = calculate_distance_traveled();
         
         if (robot_mqtt_check_connection() && (now_ms - last_telemetry > TELEMETRY_INTERVAL_MS)) {
-            // Publish line sensor data
-            char line_payload[128];
-            snprintf(line_payload, sizeof(line_payload),
-                     "{\"adc\":%u,\"on_line\":%d,\"error\":%.3f,\"correction\":%.3f,\"ts\":%lu}",
-                     ls.adc_right, ls.right_on_line ? 1 : 0, error, correction, (unsigned long)now_ms);
-            mqtt_publish_message_safe(MQTT_TOPIC_LINE_SENSOR, line_payload);
+            // Publish system state
+            char state_payload[128];
+            snprintf(state_payload, sizeof(state_payload),
+                     "{\"state\":\"%s\",\"ts\":%lu}",
+                     get_state_string(current_state), (unsigned long)now_ms);
+            mqtt_publish_message_safe("robot/state", state_payload);
             
-            // Publish encoder speeds
-            char speed_payload[128];
-            snprintf(speed_payload, sizeof(speed_payload),
-                     "{\"speed_left\":%.2f,\"speed_right\":%.2f,\"speed_avg\":%.2f,\"ts\":%lu}",
-                     speed_kmh_left, speed_kmh_right, speed_kmh_avg, (unsigned long)now_ms);
-            mqtt_publish_message_safe("robot/speed", speed_payload);
+            // Publish main telemetry with all data
+            uint32_t enc1 = encoder_pulse_width_us(1);
+            uint32_t enc2 = encoder_pulse_width_us(2);
+            char telemetry_payload[256];
+            snprintf(telemetry_payload, sizeof(telemetry_payload),
+                     "{\"enc1\":%lu,\"enc2\":%lu,\"m1\":%.2f,\"m2\":%.2f,\"speed_kmh\":%.2f,\"speed_left\":%.2f,\"speed_right\":%.2f,\"distance_m\":%.3f,\"ts\":%lu}",
+                     (unsigned long)enc1, (unsigned long)enc2, current_m1, current_m2,
+                     speed_kmh_avg, speed_kmh_left, speed_kmh_right, distance_m,
+                     (unsigned long)now_ms);
+            mqtt_publish_message_safe(MQTT_TOPIC_TELEMETRY, telemetry_payload);
+            
+            // Publish line sensor data
+            if (line_following_enabled) {
+                char line_payload[128];
+                snprintf(line_payload, sizeof(line_payload),
+                         "{\"adc\":%u,\"on_line\":%d,\"error\":%.3f,\"correction\":%.3f,\"ts\":%lu}",
+                         ls.adc_right, ls.right_on_line ? 1 : 0, error, correction, (unsigned long)now_ms);
+                mqtt_publish_message_safe(MQTT_TOPIC_LINE_SENSOR, line_payload);
+            }
             
             last_telemetry = now_ms;
         }

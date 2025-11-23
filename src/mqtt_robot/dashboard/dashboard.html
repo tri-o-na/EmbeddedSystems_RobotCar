@@ -25,6 +25,10 @@
                 <h2>Telemetry Data</h2>
                 <div class="telemetry-data">
                     <div class="data-item">
+                        <label>System State:</label>
+                        <span id="systemState" class="highlight-value">--</span>
+                    </div>
+                    <div class="data-item">
                         <label>Left Encoder (μs):</label>
                         <span id="enc1">--</span>
                     </div>
@@ -47,6 +51,10 @@
                     <div class="data-item">
                         <label>Right Wheel Speed:</label>
                         <span id="speedRight">--</span> km/h
+                    </div>
+                    <div class="data-item">
+                        <label>Distance Traveled:</label>
+                        <span id="distanceTraveled">--</span> m
                     </div>
                 </div>
                 <div class="last-update">
@@ -145,6 +153,17 @@
                         <span id="lineCorrection">--</span>
                     </div>
                 </div>
+                <div class="line-events">
+                    <h3>Line Events</h3>
+                    <div class="data-item">
+                        <label>Last Event:</label>
+                        <span id="lineEventDisplay">--</span>
+                    </div>
+                    <div class="data-item">
+                        <label>Event Time:</label>
+                        <span id="lineEventTime">--</span>
+                    </div>
+                </div>
                 <div class="mode-status">
                     <span id="modeStatus">Mode: Manual</span>
                 </div>
@@ -181,6 +200,39 @@
                     <div class="data-item">
                         <label>Accel Z:</label>
                         <span id="accelZ">--</span> g
+                    </div>
+                </div>
+            </section>
+
+            <!-- Obstacle Detection Section -->
+            <section class="obstacle-panel">
+                <h2>Obstacle Detection</h2>
+                <div class="obstacle-data">
+                    <div class="data-item">
+                        <label>Distance:</label>
+                        <span id="obstacleDistance">--</span>
+                    </div>
+                    <div class="data-item">
+                        <label>Left Width:</label>
+                        <span id="obstacleLeftWidth">--</span>
+                    </div>
+                    <div class="data-item">
+                        <label>Right Width:</label>
+                        <span id="obstacleRightWidth">--</span>
+                    </div>
+                    <div class="data-item">
+                        <label>Chosen Path:</label>
+                        <span id="obstacleChosenPath">--</span>
+                    </div>
+                    <div class="data-item">
+                        <label>Recovery Status:</label>
+                        <span id="obstacleRecoveryStatus">--</span>
+                    </div>
+                </div>
+                <div class="obstacle-log">
+                    <h3>Obstacle Encounters Log</h3>
+                    <div id="obstacleLogContainer" class="obstacle-log-container">
+                        <!-- Log entries will be added here -->
                     </div>
                 </div>
             </section>

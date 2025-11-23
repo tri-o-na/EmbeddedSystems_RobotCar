@@ -58,7 +58,7 @@ static void (*mqtt_cmd_callback)(const char *topic, const char *payload, int len
 // ============================================================
 static bool mqtt_publish_in_progress = false;
 static absolute_time_t mqtt_last_publish_time = 0;  // Initialize to 0 (nil_time equivalent)
-static const uint32_t MQTT_MIN_PUBLISH_INTERVAL_MS = 800;  // Minimum 800ms between publishes
+static const uint32_t MQTT_MIN_PUBLISH_INTERVAL_MS = 100;  // Minimum 100ms between publishes (reduced from 800ms)
 static const uint32_t MQTT_PUBLISH_DRAIN_TIMEOUT_MS = 1500; // Max time to wait for queue to drain
 
 // ============================================================

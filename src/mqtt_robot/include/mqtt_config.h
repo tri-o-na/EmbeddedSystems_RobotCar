@@ -13,5 +13,6 @@
 #define MQTT_TOPIC_IMU "robot/imu"
 
 // Telemetry publish interval (milliseconds)
-#define TELEMETRY_INTERVAL_MS 1000
+// Note: Telemetry now publishes every 200ms for real-time updates
+#define TELEMETRY_INTERVAL_MS 200
 

@@ -322,8 +322,12 @@ int main() {
     setupUltrasonicPins(TRIG_PIN, ECHO_PIN);
     servo_set_pulse(SERVO_CENTER_PULSE);
 
-    // Initialize WiFi
+    // Initialize WiFi with proper reset sequence
     printf("Initializing WiFi...\n");
+    
+    // Add initial delay to ensure chip is powered/reset
+    sleep_ms(1000);
+    
     if (cyw43_arch_init()) {
         printf("ERROR: Failed to initialize WiFi hardware\n");
         while(1) {
@@ -334,8 +338,22 @@ int main() {
     
     printf("Enabling station mode...\n");
     cyw43_arch_enable_sta_mode();
-    printf("Station mode enabled, waiting for WiFi chip to initialize...\n");
-    sleep_ms(5000);  // Increased delay - Give WiFi chip more time to initialize
+    
+    // Disconnect any existing WiFi connection first (important for reflashing)
+    printf("Resetting WiFi connection state...\n");
+    cyw43_wifi_leave(&cyw43_state, CYW43_ITF_STA);
+    sleep_ms(2000);  // Wait for disconnect to complete
+    
+    printf("Station mode enabled, waiting for WiFi chip to fully reset...\n");
+    sleep_ms(3000);  // Give WiFi chip time to reset
+    
+    // Poll to ensure chip is ready before scanning
+    printf("Polling WiFi chip to ensure readiness...\n");
+    for (int i = 0; i < 20; i++) {
+        cyw43_arch_poll();
+        sleep_ms(50);
+    }
+    printf("WiFi chip ready for scanning.\n");
     
     // Scan for available networks to debug
     printf("\n=== Scanning for WiFi Networks ===\n");
@@ -440,6 +458,8 @@ int main() {
     int last_turn_dir = 0;
     uint64_t now;
     uint32_t last_telemetry = 0;
+    uint32_t last_state_publish = 0;
+    uint32_t last_line_sensor_publish = 100;  // Offset by 100ms to avoid simultaneous publish with telemetry
     uint32_t last_blink = 0;
     absolute_time_t last_connection_check = get_absolute_time();
     float error = 0.0f;
@@ -708,6 +728,21 @@ int main() {
         }
 
         // -------------------------------------------------------------------
+        // Track line events (on/off transitions) - ALWAYS track, not just in line following mode
+        // -------------------------------------------------------------------
+        if (ls.right_on_line != last_line_state) {
+            last_line_state = ls.right_on_line;
+            if (robot_mqtt_check_connection() && (now_ms - last_line_event_time > 100)) {
+                char line_event_payload[128];
+                snprintf(line_event_payload, sizeof(line_event_payload),
+                         "{\"event\":\"%s\",\"ts\":%lu}",
+                         ls.right_on_line ? "ON_LINE" : "OFF_LINE", (unsigned long)now_ms);
+                mqtt_publish_message_safe("robot/line_events", line_event_payload);
+                last_line_event_time = now_ms;
+            }
+        }
+
+        // -------------------------------------------------------------------
         // 1. PID LINE FOLLOWING
         // -------------------------------------------------------------------
         if (line_following_enabled) {
@@ -717,19 +752,6 @@ int main() {
             correction = pid_update(&linePID, error);
 
             float min_drive = 0.20f;
-
-            // Track line events (on/off transitions)
-            if (ls.right_on_line != last_line_state) {
-                last_line_state = ls.right_on_line;
-                if (robot_mqtt_check_connection() && (now_ms - last_line_event_time > 100)) {
-                    char line_event_payload[128];
-                    snprintf(line_event_payload, sizeof(line_event_payload),
-                             "{\"event\":\"%s\",\"ts\":%lu}",
-                             ls.right_on_line ? "ON_LINE" : "OFF_LINE", (unsigned long)now_ms);
-                    mqtt_publish_message_safe("robot/line_events", line_event_payload);
-                    last_line_event_time = now_ms;
-                }
-            }
 
             if (ls.right_on_line) {
                 left_speed  = base_speed - correction + CALIBRATION_BIAS;
@@ -818,6 +840,9 @@ int main() {
             // Manual mode or idle
             current_m1 = 0.0f;
             current_m2 = 0.0f;
+            // Reset error and correction when not in line following mode
+            error = 0.0f;
+            correction = 0.0f;
         }
 
         // -------------------------------------------------------------------
@@ -841,15 +866,18 @@ int main() {
         calculate_speed_kmh();
         float distance_m = calculate_distance_traveled();
         
-        if (robot_mqtt_check_connection() && (now_ms - last_telemetry > TELEMETRY_INTERVAL_MS)) {
-            // Publish system state
+        // Publish system state (every 1 second, separate from telemetry)
+        if (robot_mqtt_check_connection() && (now_ms - last_state_publish > 1000)) {
             char state_payload[128];
             snprintf(state_payload, sizeof(state_payload),
                      "{\"state\":\"%s\",\"ts\":%lu}",
                      get_state_string(current_state), (unsigned long)now_ms);
             mqtt_publish_message_safe("robot/state", state_payload);
-            
-            // Publish main telemetry with all data
+            last_state_publish = now_ms;
+        }
+        
+        // Publish main telemetry with all data (every 200ms for real-time updates)
+        if (robot_mqtt_check_connection() && (now_ms - last_telemetry > 200)) {
             uint32_t enc1 = encoder_pulse_width_us(1);
             uint32_t enc2 = encoder_pulse_width_us(2);
             char telemetry_payload[256];
@@ -859,17 +887,24 @@ int main() {
                      speed_kmh_avg, speed_kmh_left, speed_kmh_right, distance_m,
                      (unsigned long)now_ms);
             mqtt_publish_message_safe(MQTT_TOPIC_TELEMETRY, telemetry_payload);
-            
-            // Publish line sensor data
-            if (line_following_enabled) {
-                char line_payload[128];
-                snprintf(line_payload, sizeof(line_payload),
-                         "{\"adc\":%u,\"on_line\":%d,\"error\":%.3f,\"correction\":%.3f,\"ts\":%lu}",
-                         ls.adc_right, ls.right_on_line ? 1 : 0, error, correction, (unsigned long)now_ms);
-                mqtt_publish_message_safe(MQTT_TOPIC_LINE_SENSOR, line_payload);
-            }
-            
             last_telemetry = now_ms;
+        }
+        
+        // Publish line sensor data separately (every 200ms, offset from telemetry to avoid backpressure)
+        // This allows dashboard to see sensor readings even in manual mode
+        if (robot_mqtt_check_connection() && (now_ms - last_line_sensor_publish > 200)) {
+            // Read fresh line sensor data right before publishing
+            line_sample_t ls_fresh;
+            lf_read(&ls_fresh);
+            char line_payload[128];
+            snprintf(line_payload, sizeof(line_payload),
+                     "{\"adc\":%u,\"on_line\":%d,\"error\":%.3f,\"correction\":%.3f,\"ts\":%lu}",
+                     ls_fresh.adc_right, ls_fresh.right_on_line ? 1 : 0, error, correction, (unsigned long)now_ms);
+            if (mqtt_publish_message_safe(MQTT_TOPIC_LINE_SENSOR, line_payload)) {
+                printf("[LINE] Published: ADC=%u, on_line=%d, error=%.3f, correction=%.3f\n",
+                       ls_fresh.adc_right, ls_fresh.right_on_line ? 1 : 0, error, correction);
+            }
+            last_line_sensor_publish = now_ms;
         }
 
         sleep_ms(60);

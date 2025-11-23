@@ -11,7 +11,6 @@ html, body {
 
 body {
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
     padding: 10px;
     color: #333;
     display: flex;
@@ -28,12 +27,10 @@ body {
 }
 
 header {
-    background: rgba(255, 255, 255, 0.95);
     backdrop-filter: blur(10px);
     border-radius: 12px;
     padding: 12px 20px;
     margin-bottom: 10px;
-    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
     display: flex;
     justify-content: space-between;
     align-items: center;
@@ -923,4 +920,3 @@ button:active {
     border: 1px solid #fde68a;
     word-break: break-all;
 }
-

@@ -200,21 +200,43 @@ function connectMQTT() {
                     
                 // ------------------ Line Sensor Data ------------------
                 case "robot/line_sensor":
+                    // Update ADC value (always show, even if 0)
                     if (parsedData.adc !== undefined) {
-                        document.getElementById('lineADC').textContent = parsedData.adc;
+                        const adcElement = document.getElementById('lineADC');
+                        if (adcElement) {
+                            adcElement.textContent = parsedData.adc;
+                        }
                     }
+                    
+                    // Update On Line status (handle both boolean and integer 0/1)
                     if (parsedData.on_line !== undefined) {
                         const onLineEl = document.getElementById('onLine');
-                        onLineEl.textContent = parsedData.on_line ? "Yes" : "No";
-                        onLineEl.style.color = parsedData.on_line ? "#10b981" : "#ef4444";
+                        if (onLineEl) {
+                            // Handle both boolean and integer (0/1) values
+                            const isOnLine = parsedData.on_line === true || parsedData.on_line === 1 || parsedData.on_line === "1";
+                            onLineEl.textContent = isOnLine ? "Yes" : "No";
+                            onLineEl.style.color = isOnLine ? "#10b981" : "#ef4444";
+                        }
                     }
+                    
+                    // Update Error value
                     if (parsedData.error !== undefined) {
-                        document.getElementById('lineError').textContent = parsedData.error.toFixed(3);
+                        const errorElement = document.getElementById('lineError');
+                        if (errorElement) {
+                            errorElement.textContent = parseFloat(parsedData.error).toFixed(3);
+                        }
                     }
+                    
+                    // Update Correction value
                     if (parsedData.correction !== undefined) {
-                        document.getElementById('lineCorrection').textContent = parsedData.correction.toFixed(3);
+                        const correctionElement = document.getElementById('lineCorrection');
+                        if (correctionElement) {
+                            correctionElement.textContent = parseFloat(parsedData.correction).toFixed(3);
+                        }
                     }
+                    
                     console.log("Line sensor data:", parsedData);
+                    updateLastUpdateTime();
                     break;
                     
                 // ------------------ Barcode Data ------------------
@@ -412,15 +434,29 @@ function connectMQTT() {
                             lineEventElement.innerText = eventText;
                             lineEventElement.style.color = parsedData.event === "ON_LINE" ? "#10b981" : "#ef4444";
                         }
-                        // Add timestamp
+                        // Add timestamp (handle both milliseconds and seconds)
                         if (parsedData.ts !== undefined) {
                             const lineEventTimeElement = document.getElementById("lineEventTime");
                             if (lineEventTimeElement) {
-                                const date = new Date(parsedData.ts);
-                                lineEventTimeElement.innerText = date.toLocaleTimeString();
+                                // Timestamp from Pico is in milliseconds since boot
+                                // Convert to Date object (will show relative time, but readable)
+                                const timestamp = parseInt(parsedData.ts);
+                                const date = new Date(timestamp);
+                                // If timestamp is too small (likely milliseconds since boot, not epoch), show as relative time
+                                if (timestamp < 1000000000000) {
+                                    // It's milliseconds since boot, show as time string
+                                    const hours = Math.floor(timestamp / 3600000) % 24;
+                                    const minutes = Math.floor((timestamp % 3600000) / 60000);
+                                    const seconds = Math.floor((timestamp % 60000) / 1000);
+                                    lineEventTimeElement.innerText = `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+                                } else {
+                                    // It's a proper epoch timestamp
+                                    lineEventTimeElement.innerText = date.toLocaleTimeString();
+                                }
                             }
                         }
                     }
+                    console.log("Line event:", parsedData);
                     break;
 
                 default:

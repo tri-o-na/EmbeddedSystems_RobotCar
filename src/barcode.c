@@ -3,8 +3,11 @@
 #include <string.h>
 #include <stdlib.h>
 
-#define BARCODE_PIN 3
 #define TIMEOUT_US 4000000
+
+// Global message buffer for MQTT
+char decoded_message[64] = {0};
+int message_length = 0;
 
 // ------------------------------------------------------
 // Code39 dictionary
@@ -31,8 +34,8 @@ static const code39_t CODE39_TABLE[] = {
 // Init
 // ------------------------------------------------------
 void barcode_init(void) {
-    gpio_init(BARCODE_PIN);
-    gpio_set_dir(BARCODE_PIN, GPIO_IN);
+    gpio_init(BARCODE_IR_SENSOR_PIN);
+    gpio_set_dir(BARCODE_IR_SENSOR_PIN, GPIO_IN);
 }
 
 // ------------------------------------------------------
@@ -42,12 +45,12 @@ static void wait_for_first_black() {
     printf("Waiting for first BLACK bar...\n");
 
     while (true) {
-        int v = gpio_get(BARCODE_PIN);
+        int v = gpio_get(BARCODE_IR_SENSOR_PIN);
 
         int stable = 0;
         for (int i = 0; i < STABLE_READS; i++) {
             sleep_us(80);
-            if (gpio_get(BARCODE_PIN) == v) stable++;
+            if (gpio_get(BARCODE_IR_SENSOR_PIN) == v) stable++;
         }
 
         if (stable == STABLE_READS && v == 1) {
@@ -83,7 +86,7 @@ void barcode_nonblocking_update(void) {
         return;
     }
 
-    int v = gpio_get(BARCODE_PIN);
+    int v = gpio_get(BARCODE_IR_SENSOR_PIN);
 
     // State initialization: Wait for the first transition (black bar start)
     if (!scanning_active) {
@@ -105,7 +108,7 @@ void barcode_nonblocking_update(void) {
         int stable = 0;
         for (int i = 0; i < STABLE_READS; i++) {
             sleep_us(80);
-            if (gpio_get(BARCODE_PIN) == v) stable++;
+            if (gpio_get(BARCODE_IR_SENSOR_PIN) == v) stable++;
         }
         if (stable < STABLE_READS) return; // Not stable, ignore edge
         
@@ -154,12 +157,12 @@ void barcode_scan(barcode_scan_t *scan) {
     printf("=== SCANNING ===\n");
 
     while (true) {
-        int v = gpio_get(BARCODE_PIN);
+        int v = gpio_get(BARCODE_IR_SENSOR_PIN);
 
         int stable = 0;
         for (int i = 0; i < STABLE_READS; i++) {
             sleep_us(80);
-            if (gpio_get(BARCODE_PIN) == v) stable++;
+            if (gpio_get(BARCODE_IR_SENSOR_PIN) == v) stable++;
         }
         if (stable < STABLE_READS) continue;
 
@@ -232,7 +235,7 @@ void barcode_decode_full(barcode_scan_t *scan) {
         return;
     }
 
-    printf("\n=== DECODING MULTI-CHAR (RIGID 10-BAR STEP) ===\n"); // MODIFIED title
+    printf("\n=== DECODING MULTI-CHAR (RIGID 10-BAR STEP) ===\n"); 
 
     char output[64];
     int out_i = 0;
@@ -261,12 +264,12 @@ void barcode_decode_full(barcode_scan_t *scan) {
         } else {
             // invalid → Still skip 10 bars to enforce synchronization 
             // (9 data bars + 1 separator bar)
-            s += 10; // <-- MODIFIED: Removed sliding window (s+=1)
+            s += 10; 
         }
     }
 
     if (out_i == 0) {
-        printf("No valid characters decoded using rigid structure.\n"); // MODIFIED message
+        printf("No valid characters decoded using rigid structure.\n");
         return;
     }
 
@@ -274,4 +277,12 @@ void barcode_decode_full(barcode_scan_t *scan) {
 
     printf("FINAL STRING: %s\n", output);
     printf("=========================\n");
+
+    strncpy(decoded_message, output, sizeof(decoded_message) - 1);
+    message_length = strlen(decoded_message);
+}
+
+void reset_message(void) {
+    memset(decoded_message, 0, sizeof(decoded_message));
+    message_length = 0;
 }

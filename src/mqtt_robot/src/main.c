@@ -15,6 +15,8 @@
 #include "line_follow.h"
 #include "pid.h"
 #include "imu_lis3dh.h"
+#include "ultrasonic.h"
+#include "servo.h"
 
 // External reference to cyw43_state (defined in cyw43_arch)
 extern cyw43_t cyw43_state;
@@ -22,6 +24,30 @@ extern cyw43_t cyw43_state;
 // Track current motor speeds for telemetry
 static float current_m1 = 0.0f;
 static float current_m2 = 0.0f;
+
+// WiFi scan result callback
+static int wifi_scan_result(void *env, const cyw43_ev_scan_result_t *result) {
+    if (result) {
+        printf("  Found: %-32s (RSSI: %d, Channel: %d", result->ssid, result->rssi, result->channel);
+        if (result->auth_mode == CYW43_AUTH_WPA2_AES_PSK) {
+            printf(", WPA2 AES");
+        } else if (result->auth_mode == CYW43_AUTH_WPA_TKIP_PSK) {
+            printf(", WPA TKIP");
+        }
+        printf(")\n");
+        
+        // Check if this is our target network
+        if (strcmp((char*)result->ssid, WIFI_SSID) == 0) {
+            printf("  *** MATCH FOUND: This is the target network '%s' ***\n", WIFI_SSID);
+            if (result->channel > 14) {
+                printf("  WARNING: Channel %d suggests 5GHz - Pico W only supports 2.4GHz!\n", result->channel);
+            } else {
+                printf("  Channel %d is 2.4GHz - should work with Pico W\n", result->channel);
+            }
+        }
+    }
+    return 0;
+}
 
 // Speed calculation constants
 #define WHEEL_DIAMETER_MM 65.0f        // Wheel diameter in mm (adjust to your wheel size)
@@ -41,10 +67,10 @@ static bool line_following_enabled = false;
 static PID line_follow_pid;
 static uint64_t last_seen_black_time = 0;
 static int last_turn_dir = 0; // -1 = left, +1 = right, 0 = straight
-static const float LINE_FOLLOW_BASE_SPEED = 0.30f;
+static const float LINE_FOLLOW_BASE_SPEED = 0.20f; // Slower base speed for safety with ultrasonic
 
 // Barcode tracking state
-static bool barcode_tracking_enabled = false;
+static bool barcode_tracking_enabled = true; // Enable by default
 
 // IMU straight-line navigation mode
 static bool imu_straight_mode = false;
@@ -53,6 +79,40 @@ static const float IMU_BASE_SPEED = 0.45f;
 static float heading_setpoint = 0.0f;
 static float heading_smooth = 0.0f;
 static float distance_traveled_m = 0.0f;
+
+// ---- DISTANCE SETTINGS ----
+#define STOP_DISTANCE_CM 20.0f 
+#define DETECTION_RANGE_CM 30.0f // Increased slightly to ensure we catch the edges
+#define CLEAR_RANGE_CM 40.0f 
+
+// ---- SERVO SETTINGS ----
+#define SERVO_PIN 15 
+#define TRIG_PIN 0   
+#define ECHO_PIN 1   
+
+#define SERVO_CENTER_PULSE 1500
+#define SERVO_LEFT_PULSE 2000
+#define SERVO_RIGHT_PULSE 1000
+
+// 45-degree scan
+#define SERVO_SCAN_DEGREES 45.0f
+#define SERVO_US_PER_DEG 5.556f 
+#define SERVO_STEP_US 10 
+#define SERVO_SAMPLE_DELAY_MS 350 
+
+// BEAM WIDTH CORRECTION
+#define BEAM_CORRECTION_DEG 12.0f 
+
+// ---- Motor Calibration Bias ----
+#define CALIBRATION_BIAS 0.18f 
+
+// Helper function to clamp a float value
+static float clampf(float v, float lo, float hi)
+{
+    if (v < lo) return lo;
+    if (v > hi) return hi;
+    return v;
+}
 
 // Function to calculate speed in km/h from encoder readings
 void calculate_speed_kmh(void) {
@@ -113,7 +173,7 @@ void process_robot_commands(const char *topic, const char *payload, int len) {
             line_following_enabled = true;
             imu_straight_mode = false;
             printf("  Line following mode ENABLED\n");
-            pid_init(&line_follow_pid, 0.08f, 0.00f, 0.002f, -0.25f, 0.25f);
+            pid_init(&line_follow_pid, 0.06f, 0.00f, 0.005f, -0.25f, 0.25f);
             line_follow_pid.setpoint = 1.0f; // want to always see black (1.0)
             last_seen_black_time = time_us_64();
             last_turn_dir = 0;
@@ -208,7 +268,7 @@ int main() {
     // Small delay to let USB initialize
     sleep_ms(1500);
     
-    printf("\n=== MQTT Robot Car - Phase 2 ===\n");
+    printf("\n=== MQTT Robot Car - Phase 3 (Integration) ===\n");
     printf("Step 1: Initializing motors and encoders...\n");
     
     // Initialize motors and encoders FIRST (before WiFi)
@@ -234,6 +294,12 @@ int main() {
     
     // Initialize barcode sensor (GPIO already configured in barcode.c)
     printf("Step 1c: Barcode sensor ready (GPIO %d)\n", BARCODE_IR_SENSOR_PIN);
+
+    // Initialize Ultrasonic and Servo
+    printf("Step 1d: Initializing Ultrasonic and Servo...\n");
+    servo_init(SERVO_PIN); // Initialize Servo on correct pin
+    servo_set_pulse_us(SERVO_CENTER_PULSE); // Center servo
+    setupUltrasonicPins(TRIG_PIN, ECHO_PIN);
     
     printf("Step 2: Testing LED...\n");
     
@@ -256,6 +322,18 @@ int main() {
     printf("Step 5: Enabling station mode...\n");
     cyw43_arch_enable_sta_mode();
     printf("Station mode enabled\n");
+    sleep_ms(2000);  // Give WiFi chip time to initialize
+    
+    // Scan for available networks to debug
+    printf("\n=== Scanning for WiFi Networks ===\n");
+    cyw43_wifi_scan_options_t scan_options = {0};
+    int scan_result = cyw43_wifi_scan(&cyw43_state, &scan_options, NULL, wifi_scan_result);
+    if (scan_result == 0) {
+        printf("Scan initiated, waiting for results...\n");
+        sleep_ms(5000);  // Wait for scan to complete
+    } else {
+        printf("Scan failed (error %d), continuing anyway...\n", scan_result);
+    }
     
     printf("\n=== WiFi Connection Details ===\n");
     printf("SSID: '%s'\n", WIFI_SSID);
@@ -375,6 +453,127 @@ int main() {
             last_was_stopped = false;  // Reset flag when motors are active
         }
         
+        // -------------------------------------------------------------------
+        // ULTRASONIC OBSTACLE AVOIDANCE (Only during auto modes)
+        // -------------------------------------------------------------------
+        if (line_following_enabled || imu_straight_mode) {
+             float dist = get_distance_cm(TRIG_PIN, ECHO_PIN); 
+             // Publish Ultrasonic Telemetry occasionally
+             if (robot_mqtt_check_connection() && (now % 500 < 50)) { // rough 2Hz
+                 char us_payload[64];
+                 snprintf(us_payload, sizeof(us_payload), "{\"dist_cm\":%.1f}", dist);
+                 mqtt_publish_message_safe("robot/ultrasonic", us_payload);
+             }
+
+             if (dist > 0.1f && dist < STOP_DISTANCE_CM) {
+                printf("Obstacle at %.1f cm! Stopping for width scan.\n", dist);
+                motor_set(0, 0);
+                sleep_ms(500);
+
+                int scan_delta = (int)(SERVO_SCAN_DEGREES * SERVO_US_PER_DEG); 
+                
+                int min_pulse_seen = SERVO_CENTER_PULSE; // Furthest RIGHT pulse seen
+                int max_pulse_seen = SERVO_CENTER_PULSE; // Furthest LEFT pulse seen
+                float min_dist_seen = 1000.0f;           // Closest distance to object
+
+                // 1. Scan RIGHT (Center -> Right)
+                printf("Scanning Right...\n");
+                for (int p = SERVO_CENTER_PULSE; p >= (SERVO_CENTER_PULSE - scan_delta); p -= SERVO_STEP_US) {
+                    servo_set_pulse_us(p);
+                    sleep_ms(SERVO_SAMPLE_DELAY_MS);
+                    
+                    float scan_dist = get_distance_cm(TRIG_PIN, ECHO_PIN);
+                    if (scan_dist > 0.1f && scan_dist < DETECTION_RANGE_CM) {
+                        if (p < min_pulse_seen) min_pulse_seen = p;
+                        if (scan_dist < min_dist_seen) min_dist_seen = scan_dist;
+                    }
+                }
+                // Return to center
+                servo_set_pulse_us(SERVO_CENTER_PULSE);
+                sleep_ms(500);
+
+                // 2. Scan LEFT (Center -> Left)
+                printf("Scanning Left...\n");
+                for (int p = SERVO_CENTER_PULSE; p <= (SERVO_CENTER_PULSE + scan_delta); p += SERVO_STEP_US) {
+                    servo_set_pulse_us(p);
+                    sleep_ms(SERVO_SAMPLE_DELAY_MS);
+                    
+                    float scan_dist = get_distance_cm(TRIG_PIN, ECHO_PIN);
+                    if (scan_dist > 0.1f && scan_dist < DETECTION_RANGE_CM) {
+                        if (p > max_pulse_seen) max_pulse_seen = p;
+                        if (scan_dist < min_dist_seen) min_dist_seen = scan_dist;
+                    }
+                }
+                // Return to center
+                servo_set_pulse_us(SERVO_CENTER_PULSE);
+                sleep_ms(500);
+
+                // --- CALCULATE WIDTHS ---
+                float left_span_us = (float)(max_pulse_seen - SERVO_CENTER_PULSE);
+                float right_span_us = (float)(SERVO_CENTER_PULSE - min_pulse_seen);
+                float left_deg = left_span_us / SERVO_US_PER_DEG;
+                float right_deg = right_span_us / SERVO_US_PER_DEG;
+
+                // Apply Beam Width Correction
+                left_deg = (left_deg > BEAM_CORRECTION_DEG) ? (left_deg - BEAM_CORRECTION_DEG) : 0.0f;
+                right_deg = (right_deg > BEAM_CORRECTION_DEG) ? (right_deg - BEAM_CORRECTION_DEG) : 0.0f;
+
+                float left_obs_width = min_dist_seen * (left_deg * 3.14159f / 180.0f);
+                float right_obs_width = min_dist_seen * (right_deg * 3.14159f / 180.0f);
+
+                printf("Widths (Corrected) -> L: %.1f cm, R: %.1f cm\n", left_obs_width, right_obs_width);
+
+                // 3. Decision: Go with left/right with lesser cm (lesser width)
+                if (left_obs_width < right_obs_width) {
+                    printf("Turning LEFT (Lesser width)\n");
+                    // Step 1: Turn ~30 degrees LEFT
+                    motor_set(0.35f, -0.35f); 
+                    sleep_ms(300); 
+                    // Step 2: Go Forward for 2 seconds
+                    motor_set(0.25f, 0.25f); 
+                    sleep_ms(2000); 
+                    // Step 3: Turn RIGHT (opposite) ~60 degrees
+                    motor_set(-0.35f, 0.35f); 
+                    sleep_ms(600);
+                    // Step 4: Move Forward to find the line
+                    motor_set(0.20f, 0.20f); 
+                    uint64_t search_start = time_us_64();
+                    while (true) {
+                        line_sample_t ls_check;
+                        lf_read(&ls_check);
+                        if (ls_check.right_on_line) break;
+                        if (time_us_64() - search_start > 5000000) break;
+                        sleep_ms(10);
+                    }
+                } else {
+                    printf("Turning RIGHT (Lesser width)\n");
+                    // Step 1: Turn ~30 degrees RIGHT
+                    motor_set(-0.35f, 0.35f); 
+                    sleep_ms(300); 
+                    // Step 2: Go Forward for 2 seconds
+                    motor_set(0.25f, 0.25f); 
+                    sleep_ms(2000); 
+                    // Step 3: Turn LEFT (opposite) ~60 degrees
+                    motor_set(0.35f, -0.35f); 
+                    sleep_ms(600);
+                    // Step 4: Move Forward to find the line
+                    motor_set(0.20f, 0.20f); 
+                    uint64_t search_start = time_us_64();
+                    while (true) {
+                        line_sample_t ls_check;
+                        lf_read(&ls_check);
+                        if (ls_check.right_on_line) break;
+                        if (time_us_64() - search_start > 5000000) break;
+                        sleep_ms(10);
+                    }
+                }
+                
+                motor_set(0,0);
+                sleep_ms(200); 
+                continue; 
+            }
+        }
+        
         // Line following control loop (if enabled)
         if (line_following_enabled) {
             line_sample_t ls;
@@ -382,15 +581,15 @@ int main() {
             uint64_t now_us = time_us_64();
             
             // Convert sensor to analog-like input for PID
-            float sensor_val = ls.left_on_line ? 1.0f : 0.0f;
+            float sensor_val = ls.right_on_line ? 1.0f : 0.0f; // Using RIGHT sensor for line follow
             float error = line_follow_pid.setpoint - sensor_val;
             float correction = pid_update(&line_follow_pid, error);
             
             float left_speed = 0.0f, right_speed = 0.0f;
             
-            if (ls.left_on_line) {
+            if (ls.right_on_line) {
                 // On black line → go straight, apply PID correction
-                left_speed = LINE_FOLLOW_BASE_SPEED - correction;
+                left_speed = LINE_FOLLOW_BASE_SPEED - correction + CALIBRATION_BIAS;
                 right_speed = LINE_FOLLOW_BASE_SPEED + correction;
                 last_seen_black_time = now_us;
                 
@@ -406,11 +605,11 @@ int main() {
                 if (lost_duration < 300000) {  // 300ms
                     // Short-term drift → steer using last known direction
                     if (last_turn_dir == -1) {
-                        left_speed = LINE_FOLLOW_BASE_SPEED * 0.25f;
-                        right_speed = LINE_FOLLOW_BASE_SPEED * 1.1f;
-                    } else {
                         left_speed = LINE_FOLLOW_BASE_SPEED * 1.0f;
                         right_speed = LINE_FOLLOW_BASE_SPEED * 0.5f;
+                    } else {
+                        left_speed = LINE_FOLLOW_BASE_SPEED * 0.25f;
+                        right_speed = LINE_FOLLOW_BASE_SPEED * 1.1f;
                     }
                 } else {
                     // Lost line - try to recover
@@ -420,7 +619,7 @@ int main() {
                         motor_set(0.3f, -0.3f);
                         sleep_ms(25);
                         lf_read(&ls);
-                        if (ls.left_on_line) { found = true; break; }
+                        if (ls.right_on_line) { found = true; break; }
                     }
                     // Try left turn if not found
                     if (!found) {
@@ -428,7 +627,7 @@ int main() {
                             motor_set(-0.3f, 0.3f);
                             sleep_ms(25);
                             lf_read(&ls);
-                            if (ls.left_on_line) { found = true; break; }
+                            if (ls.right_on_line) { found = true; break; }
                         }
                     }
                     if (!found) {
@@ -450,7 +649,7 @@ int main() {
                 char line_payload[128];
                 snprintf(line_payload, sizeof(line_payload),
                          "{\"adc\":%u,\"on_line\":%d,\"error\":%.3f,\"correction\":%.3f,\"ts\":%lu}",
-                         ls.adc_left, ls.left_on_line ? 1 : 0, error, correction,
+                         ls.adc_right, ls.right_on_line ? 1 : 0, error, correction,
                          (unsigned long)now);
                 mqtt_publish_message_safe(MQTT_TOPIC_LINE_SENSOR, line_payload);
             }
@@ -542,4 +741,3 @@ int main() {
     
     return 0;
 }
-

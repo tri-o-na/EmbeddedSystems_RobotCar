@@ -20,21 +20,29 @@ static volatile uint32_t enc2_last_rise_us = 0;
 static volatile uint32_t enc1_pulse_us = 0;
 static volatile uint32_t enc2_pulse_us = 0;
 
+// Encoder counts
+static volatile uint32_t enc1_count = 0;
+static volatile uint32_t enc2_count = 0;
+
 // ==== Encoder interrupt ====
 static void encoder_isr(uint gpio, uint32_t events)
 {
     uint32_t now = to_us_since_boot(get_absolute_time());
     if (gpio == ENC1_A)
     {
-        if (events & GPIO_IRQ_EDGE_RISE)
+        if (events & GPIO_IRQ_EDGE_RISE) {
             enc1_last_rise_us = now;
+            enc1_count++;
+        }
         else if ((events & GPIO_IRQ_EDGE_FALL) && enc1_last_rise_us)
             enc1_pulse_us = now - enc1_last_rise_us;
     }
     else if (gpio == ENC2_A)
     {
-        if (events & GPIO_IRQ_EDGE_RISE)
+        if (events & GPIO_IRQ_EDGE_RISE) {
             enc2_last_rise_us = now;
+            enc2_count++;
+        }
         else if ((events & GPIO_IRQ_EDGE_FALL) && enc2_last_rise_us)
             enc2_pulse_us = now - enc2_last_rise_us;
     }
@@ -132,4 +140,17 @@ uint32_t encoder_pulse_width_us(int motor_index)
     if (motor_index == 2)
         return enc2_pulse_us;
     return 0;
+}
+
+uint32_t encoder_get_count(int motor_index)
+{
+    if (motor_index == 1) return enc1_count;
+    if (motor_index == 2) return enc2_count;
+    return 0;
+}
+
+void encoder_reset_counts(void)
+{
+    enc1_count = 0;
+    enc2_count = 0;
 }
